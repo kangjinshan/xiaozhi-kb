@@ -6,12 +6,14 @@
 #include "config.h"
 #include "app_mode.h"
 #include "ble_hid_keyboard.h"
+#include "keyboard_touch_arrows.h"
 
 #define TAG "keyboard_app"
 
 void RunKeyboardApp() {
     auto& kb = BleHidKeyboard::GetInstance();
     kb.Init();
+    StartKeyboardTouchArrows(kb);
 
     // 左键：按住=右Option
     static Button left(BOOT_BUTTON_GPIO);
@@ -32,6 +34,6 @@ void RunKeyboardApp() {
         // 屏幕状态更新在 Task 7 接入 Display
     });
 
-    ESP_LOGI(TAG, "keyboard app running");
+    ESP_LOGI(TAG, "keyboard app running (LEFT/GPIO10=RightOption, RIGHT/GPIO9=Enter, touch=Arrow keys)");
     while (true) vTaskDelay(pdMS_TO_TICKS(1000));
 }
