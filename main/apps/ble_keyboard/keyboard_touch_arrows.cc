@@ -5,6 +5,7 @@
 #include "config.h"
 #include "touch_arrow_mapper.h"
 #include "keyboard_touch_gesture.h"
+#include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
 #include <esp_err.h>
@@ -24,8 +25,13 @@ namespace {
 constexpr uint32_t kTouchPollMs = 20;
 constexpr uint32_t kRepeatMs = 120;
 constexpr uint32_t kTouchReadWarnMs = 1000;
+constexpr uint32_t kPmicReadWarnMs = 1000;
 constexpr uint32_t kSelectorHoldMs = 2000;
 constexpr uint8_t kAxp2101Address = 0x34;
+constexpr uint8_t kAxp2101Irq1StatusReg = 0x48;
+constexpr uint8_t kAxp2101Irq2EnableReg = 0x41;
+constexpr uint8_t kAxp2101Irq2StatusReg = 0x49;
+constexpr uint8_t kAxp2101Irq3StatusReg = 0x4A;
 
 struct TouchHardware {
     i2c_master_bus_handle_t i2c_bus = nullptr;
@@ -58,6 +64,22 @@ uint8_t HidKeyForDirection(TouchArrowDirection direction) {
 esp_err_t WriteI2cReg(i2c_master_dev_handle_t device, uint8_t reg, uint8_t value) {
     const uint8_t buffer[2] = {reg, value};
     return i2c_master_transmit(device, buffer, sizeof(buffer), 100);
+}
+
+esp_err_t ReadI2cReg(i2c_master_dev_handle_t device, uint8_t reg, uint8_t* value) {
+    return i2c_master_transmit_receive(device, &reg, sizeof(reg), value, sizeof(*value), 100);
+}
+
+esp_err_t ClearAxp2101IrqStatus(i2c_master_dev_handle_t pmic) {
+    esp_err_t err = WriteI2cReg(pmic, kAxp2101Irq1StatusReg, 0xFF);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = WriteI2cReg(pmic, kAxp2101Irq2StatusReg, 0xFF);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return WriteI2cReg(pmic, kAxp2101Irq3StatusReg, 0xFF);
 }
 
 void CleanupTouchHardware(TouchHardware* hardware) {
@@ -138,7 +160,65 @@ esp_err_t InitializeKeyboardPmic(TouchHardware* hardware) {
         }
     }
 
-    return ESP_OK;
+    uint8_t irq2_enable = 0;
+    err = ReadI2cReg(hardware->pmic, kAxp2101Irq2EnableReg, &irq2_enable);
+    if (err != ESP_OK) {
+        return err;
+    }
+    irq2_enable |= Axp2101PowerKeyShortPressMask();
+    err = WriteI2cReg(hardware->pmic, kAxp2101Irq2EnableReg, irq2_enable);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return ClearAxp2101IrqStatus(hardware->pmic);
+}
+
+void PollPowerKeyBackspace(TouchArrowContext* context,
+                           TickType_t now,
+                           TickType_t* last_warning_tick,
+                           bool* warning_logged,
+                           bool* short_press_latched) {
+    uint8_t irq2_status = 0;
+    esp_err_t err = ReadI2cReg(
+        context->hardware.pmic, kAxp2101Irq2StatusReg, &irq2_status);
+    if (err != ESP_OK) {
+        if (!*warning_logged || now - *last_warning_tick >= pdMS_TO_TICKS(kPmicReadWarnMs)) {
+            ESP_LOGW(TAG, "pmic irq read failed: %s", esp_err_to_name(err));
+            *last_warning_tick = now;
+            *warning_logged = true;
+        }
+        return;
+    }
+
+    if (*warning_logged) {
+        ESP_LOGI(TAG, "pmic irq read recovered");
+        *warning_logged = false;
+        *last_warning_tick = 0;
+    }
+
+    if (!IsAxp2101PowerKeyShortPressIrq(irq2_status)) {
+        *short_press_latched = false;
+        return;
+    }
+
+    esp_err_t clear_err = ClearAxp2101IrqStatus(context->hardware.pmic);
+    if (clear_err != ESP_OK) {
+        ESP_LOGW(TAG, "pmic irq clear failed: %s", esp_err_to_name(clear_err));
+    }
+
+    if (*short_press_latched) {
+        return;
+    }
+    *short_press_latched = true;
+
+    if (!context->keyboard->IsConnected()) {
+        ESP_LOGI(TAG, "pwr backspace skipped: BLE disconnected");
+        return;
+    }
+
+    ESP_LOGI(TAG, "pwr backspace");
+    context->keyboard->TapKey(HID_KEY_BACKSPACE);
 }
 
 esp_err_t InitializeTouch(TouchHardware* hardware) {
@@ -210,9 +290,19 @@ void TouchArrowTask(void* arg) {
     bool blocked_by_disconnect = false;
     bool selector_hold_logged = false;
     TickType_t selector_hold_start_tick = 0;
+    TickType_t last_pmic_warning_tick = 0;
+    bool pmic_warning_logged = false;
+    bool power_key_short_latched = true;
 
     while (true) {
         const TickType_t now = xTaskGetTickCount();
+        PollPowerKeyBackspace(
+            context,
+            now,
+            &last_pmic_warning_tick,
+            &pmic_warning_logged,
+            &power_key_short_latched);
+
         TouchArrowDirection direction = TouchArrowDirection::kNone;
         bool selector_hot_corner = false;
         esp_err_t err = esp_lcd_touch_read_data(context->hardware.touch);

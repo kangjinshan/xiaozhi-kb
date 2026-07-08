@@ -11,8 +11,8 @@
 
 // 蓝牙键盘应用：两个物理键
 //   最左键 GPIO10：按住 = 右 Option（松开释放）
-//   最右键 GPIO9 (BOOT)：单击 = 退格
-// 中间的键是 PWR 电源键（AXP2101），不参与，避免误关机。
+//   最右键 GPIO9 (BOOT)：单击 = 回车
+//   中间 PWR：单击 = 退格（通过 AXP2101 短按 IRQ 识别）
 void RunKeyboardApp() {
     // ==== 分段诊断：先确认无BLE时日志正常，再测Init ====
     for (int i = 0; i < 5; i++) {
@@ -36,15 +36,15 @@ void RunKeyboardApp() {
     left.OnPressDown([&kb]() { kb.SendModifier(HID_MOD_RIGHT_ALT, true); });
     left.OnPressUp([&kb]()  { kb.SendModifier(HID_MOD_RIGHT_ALT, false); });
 
-    // 最右键（BOOT）：单击 = 退格
+    // 最右键（BOOT）：单击 = 回车
     static Button right(BOOT_BUTTON_GPIO);
-    right.OnClick([&kb]() { kb.TapKey(HID_KEY_BACKSPACE); });
+    right.OnClick([&kb]() { kb.TapKey(HID_KEY_ENTER); });
 
     kb.SetConnectionCallback([](bool c) {
         ESP_LOGI(TAG, "BLE %s", c ? "connected" : "disconnected");
     });
 
-    ESP_LOGI(TAG, "keyboard app running (left=Right Option, boot=Backspace, touch=Arrow keys)");
+    ESP_LOGI(TAG, "keyboard app running (left=Right Option, boot=Enter, pwr=Backspace, touch=Arrow keys)");
     uint32_t heartbeat = 0;
     while (true) {
         ESP_LOGI(TAG, "keyboard heartbeat #%lu connected=%d", heartbeat++, kb.IsConnected());
