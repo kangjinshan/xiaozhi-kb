@@ -10,6 +10,7 @@
 
 #include "application.h"
 #include "app_mode.h"
+#include "app_selector.h"
 #include "keyboard_app.h"
 
 #define TAG "main"
@@ -62,7 +63,11 @@ extern "C" void app_main(void)
         return;
     }
 
-    // kXiaozhi and kSelector (before Task 8) both fall through to xiaozhi
+    if (mode == AppMode::kSelector) {
+        RunAppSelector();  // Runs the touch app selector and never returns
+        return;
+    }
+
     ESP_LOGI(TAG, "boot -> xiaozhi");
     // Initialize and run the application
     auto& app = Application::GetInstance();

@@ -1,8 +1,10 @@
 #include "keyboard_touch_arrows.h"
 
+#include "app_mode.h"
 #include "ble_hid_keyboard.h"
 #include "config.h"
 #include "touch_arrow_mapper.h"
+#include "keyboard_touch_gesture.h"
 
 #include <driver/i2c_master.h>
 #include <esp_err.h>
@@ -22,6 +24,7 @@ namespace {
 constexpr uint32_t kTouchPollMs = 20;
 constexpr uint32_t kRepeatMs = 120;
 constexpr uint32_t kTouchReadWarnMs = 1000;
+constexpr uint32_t kSelectorHoldMs = 2000;
 constexpr uint8_t kAxp2101Address = 0x34;
 
 struct TouchHardware {
@@ -205,10 +208,13 @@ void TouchArrowTask(void* arg) {
     bool touch_read_failed = false;
     bool touch_read_warning_logged = false;
     bool blocked_by_disconnect = false;
+    bool selector_hold_logged = false;
+    TickType_t selector_hold_start_tick = 0;
 
     while (true) {
         const TickType_t now = xTaskGetTickCount();
         TouchArrowDirection direction = TouchArrowDirection::kNone;
+        bool selector_hot_corner = false;
         esp_err_t err = esp_lcd_touch_read_data(context->hardware.touch);
         if (err == ESP_OK) {
             esp_lcd_touch_point_data_t touch_point = {};
@@ -222,7 +228,12 @@ void TouchArrowTask(void* arg) {
                     touch_read_warning_logged = false;
                 }
                 if (touch_count > 0) {
-                    direction = MapTouchPointToArrow(touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
+                    selector_hot_corner = IsKeyboardSelectorHotCorner(
+                        touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
+                    if (!selector_hot_corner) {
+                        direction = MapTouchPointToArrow(
+                            touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
+                    }
                 }
             } else if (err != ESP_OK) {
                 touch_read_failed = true;
@@ -242,6 +253,31 @@ void TouchArrowTask(void* arg) {
                 touch_read_warning_logged = true;
             }
         }
+
+        if (selector_hot_corner) {
+            last_direction = TouchArrowDirection::kNone;
+            last_send_tick = 0;
+            blocked_by_disconnect = false;
+
+            if (selector_hold_start_tick == 0) {
+                selector_hold_start_tick = now;
+                selector_hold_logged = false;
+            }
+            if (!selector_hold_logged) {
+                ESP_LOGI(TAG, "selector hot corner hold started");
+                selector_hold_logged = true;
+            }
+            if (now - selector_hold_start_tick >= pdMS_TO_TICKS(kSelectorHoldMs)) {
+                ESP_LOGI(TAG, "returning to app selector");
+                AppModeWriteAndReboot(AppMode::kSelector);
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(kTouchPollMs));
+            continue;
+        }
+
+        selector_hold_start_tick = 0;
+        selector_hold_logged = false;
 
         if (direction == TouchArrowDirection::kNone) {
             last_direction = TouchArrowDirection::kNone;

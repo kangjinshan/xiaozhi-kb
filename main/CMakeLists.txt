@@ -39,10 +39,12 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 list(APPEND SOURCES "apps/app_mode.cc")
+list(APPEND SOURCES "apps/app_selector.cc")
 # BLE HID keyboard (Task 5): wrapper + GAP helper (ported from ESP-IDF esp_hid example)
 list(APPEND SOURCES "apps/ble_keyboard/ble_hid_keyboard.cc")
 list(APPEND SOURCES "apps/ble_keyboard/esp_hid_gap.c")
 list(APPEND SOURCES "apps/ble_keyboard/touch_arrow_mapper.cc")
+list(APPEND SOURCES "apps/ble_keyboard/keyboard_touch_gesture.cc")
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_touch_arrows.cc")
 # Keyboard app (Task 6): binds 3 physical keys to BLE HID actions
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_app.cc")
