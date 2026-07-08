@@ -19,9 +19,9 @@
 #define AUDIO_CODEC_ES8311_ADDR  ES8311_CODEC_DEFAULT_ADDR
 #define AUDIO_CODEC_ES7210_ADDR  ES7210_CODEC_DEFAULT_ADDR
 
-#define BOOT_BUTTON_GPIO        GPIO_NUM_9   // 左键（已存在）
-#define KEY_MID_GPIO            GPIO_NUM_18  // 中键：退格 / 长按回选择界面
-#define KEY_RIGHT_GPIO          GPIO_NUM_10  // 右键：回车
+#define BOOT_BUTTON_GPIO        GPIO_NUM_9   // 最右键（板载丝印 BOOT）：单击=回车
+#define KEY_LEFT_GPIO           GPIO_NUM_10  // 最左键（板载丝印 IO10/KEY）：按住=右Option
+// 注意：中间的键是 PWR 电源键（接 AXP2101，长按关机），不是普通 GPIO，不可作键盘键。
 
 
 #define LCD_CS       GPIO_NUM_15

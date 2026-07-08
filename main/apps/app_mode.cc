@@ -4,6 +4,7 @@
 #include <nvs_flash.h>
 #include <esp_system.h>
 #include <esp_log.h>
+#include <esp_err.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -21,10 +22,13 @@ static const char* AppModeToStr(AppMode m) {
 
 AppMode AppModeRead() {
     nvs_handle_t h;
-    if (nvs_open(kNs, NVS_READONLY, &h) != ESP_OK) return AppMode::kSelector;
+    esp_err_t oerr = nvs_open(kNs, NVS_READONLY, &h);
+    ESP_LOGW(TAG, "DIAG nvs_open(%s)=%d (%s)", kNs, oerr, esp_err_to_name(oerr));
+    if (oerr != ESP_OK) return AppMode::kSelector;
     char buf[16] = {0};
     size_t len = sizeof(buf);
     esp_err_t err = nvs_get_str(h, kKey, buf, &len);
+    ESP_LOGW(TAG, "DIAG nvs_get_str(%s)=%d (%s) len=%d val='%s'", kKey, err, esp_err_to_name(err), (int)len, buf);
     nvs_close(h);
     if (err != ESP_OK) return AppMode::kSelector;
     if (strcmp(buf, "xiaozhi") == 0)  return AppMode::kXiaozhi;

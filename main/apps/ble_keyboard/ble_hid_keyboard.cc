@@ -5,6 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <esp_err.h>
 #include <esp_log.h>
 
 #include "esp_gap_ble_api.h"
@@ -84,6 +85,15 @@ BleHidKeyboard& BleHidKeyboard::GetInstance() {
     return inst;
 }
 
+static esp_err_t LogInitStep(const char* step, esp_err_t err) {
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "DIAG %s OK", step);
+    } else {
+        ESP_LOGE(TAG, "DIAG %s failed: %s", step, esp_err_to_name(err));
+    }
+    return err;
+}
+
 class ReportLock {
 public:
     ReportLock() : mutex_(GetReportMutex()) {
@@ -154,17 +164,17 @@ void BleHidKeyboard::Init() {
 
     // 1) GAP 初始化：BLE-only（C6）。esp_hid_gap_init 内部初始化 BLE 控制器 + Bluedroid，
     //    并注册 BLE GAP 回调。传 HIDD_BLE_MODE(=ESP_BT_MODE_BLE=0x01)。
-    ESP_ERROR_CHECK(esp_hid_gap_init(HIDD_BLE_MODE));
+    ESP_ERROR_CHECK(LogInitStep("esp_hid_gap_init", esp_hid_gap_init(HIDD_BLE_MODE)));
 
     // 2) 广播 + Just Works 安全参数（iocap = ESP_IO_CAP_NONE，见 esp_hid_gap.c 内已改）。
-    ESP_ERROR_CHECK(esp_hid_ble_gap_adv_init(ESP_HID_APPEARANCE_KEYBOARD, s_hid_config.device_name));
+    ESP_ERROR_CHECK(LogInitStep("esp_hid_ble_gap_adv_init", esp_hid_ble_gap_adv_init(ESP_HID_APPEARANCE_KEYBOARD, s_hid_config.device_name)));
 
     // 3) 注册 HID GATTS 事件回调（必须在 dev_init 之前，Bluedroid 要求）。
-    ESP_ERROR_CHECK(esp_ble_gatts_register_callback(esp_hidd_gatts_event_handler));
+    ESP_ERROR_CHECK(LogInitStep("esp_ble_gatts_register_callback", esp_ble_gatts_register_callback(esp_hidd_gatts_event_handler)));
 
     // 4) 初始化 HID 设备，transport = BLE。
     esp_hidd_dev_t* dev = nullptr;
-    ESP_ERROR_CHECK(esp_hidd_dev_init(&s_hid_config, ESP_HID_TRANSPORT_BLE, hidd_event_cb, &dev));
+    ESP_ERROR_CHECK(LogInitStep("esp_hidd_dev_init", esp_hidd_dev_init(&s_hid_config, ESP_HID_TRANSPORT_BLE, hidd_event_cb, &dev)));
     dev_ = dev;
 
     inited_ = true;

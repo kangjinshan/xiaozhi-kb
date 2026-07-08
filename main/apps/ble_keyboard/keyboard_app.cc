@@ -4,36 +4,50 @@
 #include <freertos/task.h>
 #include "button.h"
 #include "config.h"
-#include "app_mode.h"
 #include "ble_hid_keyboard.h"
 #include "keyboard_touch_arrows.h"
 
 #define TAG "keyboard_app"
 
+// 蓝牙键盘应用：两个物理键
+//   最左键 GPIO10：按住 = 右 Option（松开释放）
+//   最右键 GPIO9 (BOOT)：单击 = 回车
+// 中间的键是 PWR 电源键（AXP2101），不参与，避免误关机。
 void RunKeyboardApp() {
+    // ==== 分段诊断：先确认无BLE时日志正常，再测Init ====
+    for (int i = 0; i < 5; i++) {
+        ESP_LOGW(TAG, "DIAG before Init, tick=%d", i);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ESP_LOGW(TAG, "DIAG === calling BleHidKeyboard::Init() now ===");
+
     auto& kb = BleHidKeyboard::GetInstance();
     kb.Init();
     StartKeyboardTouchArrows(kb);
 
-    // 左键：按住=右Option
-    static Button left(BOOT_BUTTON_GPIO);
+    ESP_LOGW(TAG, "DIAG === Init() returned OK ===");
+    for (int i = 0; i < 5; i++) {
+        ESP_LOGW(TAG, "DIAG after Init, tick=%d", i);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    // 最左键：按住 = 右 Option
+    static Button left(KEY_LEFT_GPIO);
     left.OnPressDown([&kb]() { kb.SendModifier(HID_MOD_RIGHT_ALT, true); });
     left.OnPressUp([&kb]()  { kb.SendModifier(HID_MOD_RIGHT_ALT, false); });
 
-    // 中键：短按=退格；长按2s=回选择界面
-    static Button mid(KEY_MID_GPIO, false, 2000, 0);
-    mid.OnClick([&kb]()     { kb.TapKey(HID_KEY_BACKSPACE); });
-    mid.OnLongPress([]()    { AppModeWriteAndReboot(AppMode::kSelector); });
-
-    // 右键：单击=回车
-    static Button right(KEY_RIGHT_GPIO);
+    // 最右键（BOOT）：单击 = 回车
+    static Button right(BOOT_BUTTON_GPIO);
     right.OnClick([&kb]()   { kb.TapKey(HID_KEY_ENTER); });
 
     kb.SetConnectionCallback([](bool c) {
         ESP_LOGI(TAG, "BLE %s", c ? "connected" : "disconnected");
-        // 屏幕状态更新在 Task 7 接入 Display
     });
 
     ESP_LOGI(TAG, "keyboard app running (physical keys enabled, touch=Arrow keys)");
-    while (true) vTaskDelay(pdMS_TO_TICKS(1000));
+    uint32_t heartbeat = 0;
+    while (true) {
+        ESP_LOGI(TAG, "keyboard heartbeat #%lu connected=%d", heartbeat++, kb.IsConnected());
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }
