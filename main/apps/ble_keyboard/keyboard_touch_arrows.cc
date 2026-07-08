@@ -211,20 +211,27 @@ void TouchArrowTask(void* arg) {
         TouchArrowDirection direction = TouchArrowDirection::kNone;
         esp_err_t err = esp_lcd_touch_read_data(context->hardware.touch);
         if (err == ESP_OK) {
-            if (touch_read_failed) {
-                ESP_LOGI(TAG, "touch read recovered");
-                touch_read_failed = false;
-                last_read_warning_tick = 0;
-                touch_read_warning_logged = false;
-            }
-
-            uint16_t x = 0;
-            uint16_t y = 0;
+            esp_lcd_touch_point_data_t touch_point = {};
             uint8_t touch_count = 0;
-            const bool pressed = esp_lcd_touch_get_coordinates(
-                context->hardware.touch, &x, &y, nullptr, &touch_count, 1);
-            if (pressed && touch_count > 0) {
-                direction = MapTouchPointToArrow(x, y, LCD_H_RES, LCD_V_RES);
+            err = esp_lcd_touch_get_data(context->hardware.touch, &touch_point, &touch_count, 1);
+            if (err == ESP_OK) {
+                if (touch_read_failed) {
+                    ESP_LOGI(TAG, "touch read recovered");
+                    touch_read_failed = false;
+                    last_read_warning_tick = 0;
+                    touch_read_warning_logged = false;
+                }
+                if (touch_count > 0) {
+                    direction = MapTouchPointToArrow(touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
+                }
+            } else if (err != ESP_OK) {
+                touch_read_failed = true;
+                if (!touch_read_warning_logged ||
+                    now - last_read_warning_tick >= pdMS_TO_TICKS(kTouchReadWarnMs)) {
+                    ESP_LOGW(TAG, "touch data failed: %s", esp_err_to_name(err));
+                    last_read_warning_tick = now;
+                    touch_read_warning_logged = true;
+                }
             }
         } else {
             touch_read_failed = true;
