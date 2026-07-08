@@ -941,6 +941,7 @@ idf_component_register(SRCS ${SOURCES}
                         console
                         efuse
                         bt
+                        esp_hid
                         fatfs
                     )
 
