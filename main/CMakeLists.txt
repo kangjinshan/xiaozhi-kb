@@ -39,8 +39,11 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 list(APPEND SOURCES "apps/app_mode.cc")
+# BLE HID keyboard (Task 5): wrapper + GAP helper (ported from ESP-IDF esp_hid example)
+list(APPEND SOURCES "apps/ble_keyboard/ble_hid_keyboard.cc")
+list(APPEND SOURCES "apps/ble_keyboard/esp_hid_gap.c")
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps/ble_keyboard")
 
 # Add board common files
 list(APPEND SOURCES
