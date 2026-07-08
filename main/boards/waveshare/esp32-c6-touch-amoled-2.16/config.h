@@ -19,7 +19,9 @@
 #define AUDIO_CODEC_ES8311_ADDR  ES8311_CODEC_DEFAULT_ADDR
 #define AUDIO_CODEC_ES7210_ADDR  ES7210_CODEC_DEFAULT_ADDR
 
-#define BOOT_BUTTON_GPIO        GPIO_NUM_9
+#define BOOT_BUTTON_GPIO        GPIO_NUM_9   // 左键（已存在）
+#define KEY_MID_GPIO            GPIO_NUM_18  // 中键：退格 / 长按回选择界面
+#define KEY_RIGHT_GPIO          GPIO_NUM_10  // 右键：回车
 
 
 #define LCD_CS       GPIO_NUM_15
