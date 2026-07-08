@@ -34,6 +34,6 @@ void RunKeyboardApp() {
         // 屏幕状态更新在 Task 7 接入 Display
     });
 
-    ESP_LOGI(TAG, "keyboard app running (LEFT/GPIO10=RightOption, RIGHT/GPIO9=Enter, touch=Arrow keys)");
+    ESP_LOGI(TAG, "keyboard app running (physical keys enabled, touch=Arrow keys)");
     while (true) vTaskDelay(pdMS_TO_TICKS(1000));
 }
