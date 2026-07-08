@@ -2,6 +2,7 @@
 #include "esp_lcd_sh8601.h"
 #include "wifi_board.h"
 
+#include "app_mode.h"
 #include "application.h"
 #include "axp2101.h"
 #include "button.h"
@@ -212,6 +213,10 @@ private:
             }
             app.ToggleChatState();
         });
+        boot_button_.OnLongPress([]() {
+            ESP_LOGI(TAG, "BOOT long press -> app selector");
+            AppModeWriteAndReboot(AppMode::kSelector);
+        });
     }
 
     int DisplayPort_DispReset() {
@@ -304,7 +309,8 @@ private:
     }
 
 public:
-    WaveshareEsp32c6TouchAMOLED2inch16() : boot_button_(BOOT_BUTTON_GPIO) {
+    WaveshareEsp32c6TouchAMOLED2inch16()
+        : boot_button_(BOOT_BUTTON_GPIO, false, 2000) {
         InitializePowerSaveTimer();
         InitializeCodecI2c();
         InitializeAxp2101();
