@@ -140,7 +140,7 @@ static void hidd_event_cb(void* handler_args, esp_event_base_t base, int32_t id,
 }
 
 void BleHidKeyboard::OnConnectChange(bool connected) {
-    connected_ = connected;
+    connected_.store(connected);
     if (conn_cb_) {
         conn_cb_(connected);
     }

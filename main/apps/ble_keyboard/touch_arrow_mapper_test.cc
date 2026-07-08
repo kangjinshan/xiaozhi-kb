@@ -38,6 +38,12 @@ int main() {
     ExpectDirection("dominant vertical offset wins",
                     MapTouchPointToArrow(220, 20, kWidth, kHeight),
                     TouchArrowDirection::kUp);
+    ExpectDirection("center falls back to down",
+                    MapTouchPointToArrow(240, 240, kWidth, kHeight),
+                    TouchArrowDirection::kDown);
+    ExpectDirection("diagonal tie falls back to vertical direction",
+                    MapTouchPointToArrow(260, 260, kWidth, kHeight),
+                    TouchArrowDirection::kDown);
     ExpectDirection("zero width is invalid",
                     MapTouchPointToArrow(10, 10, 0, kHeight),
                     TouchArrowDirection::kNone);

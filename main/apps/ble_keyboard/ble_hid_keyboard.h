@@ -1,6 +1,7 @@
 #ifndef BLE_HID_KEYBOARD_H_
 #define BLE_HID_KEYBOARD_H_
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 
@@ -30,7 +31,7 @@ public:
     // 敲一下普通键：report[2]=keycode 发送 -> 50ms -> 全 0 发送。
     void TapKey(uint8_t keycode);
 
-    bool IsConnected() const { return connected_; }
+    bool IsConnected() const { return connected_.load(); }
     void SetConnectionCallback(std::function<void(bool)> cb) { conn_cb_ = std::move(cb); }
 
     // 供 C 事件回调转发使用（内部）。
@@ -46,7 +47,7 @@ private:
 
     uint8_t report_[8] = {0};   // [modifier, reserved, key1..key6]
     bool inited_ = false;
-    bool connected_ = false;
+    std::atomic_bool connected_{false};
     std::function<void(bool)> conn_cb_;
 };
 
