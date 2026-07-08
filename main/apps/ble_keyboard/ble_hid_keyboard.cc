@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <esp_log.h>
 
@@ -83,6 +84,35 @@ BleHidKeyboard& BleHidKeyboard::GetInstance() {
     return inst;
 }
 
+class ReportLock {
+public:
+    ReportLock() : mutex_(GetReportMutex()) {
+        if (mutex_ != nullptr) {
+            locked_ = xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE;
+        }
+    }
+
+    ~ReportLock() {
+        if (locked_) {
+            xSemaphoreGive(mutex_);
+        }
+    }
+
+    bool locked() const { return locked_; }
+
+private:
+    static SemaphoreHandle_t GetReportMutex() {
+        static SemaphoreHandle_t mutex = xSemaphoreCreateMutex();
+        if (mutex == nullptr) {
+            ESP_LOGE(TAG, "failed to create report mutex");
+        }
+        return mutex;
+    }
+
+    SemaphoreHandle_t mutex_ = nullptr;
+    bool locked_ = false;
+};
+
 // esp_hidd 设备事件回调（C 事件循环回调，转发给单例）。
 static void hidd_event_cb(void* handler_args, esp_event_base_t base, int32_t id, void* event_data) {
     (void)handler_args;
@@ -150,6 +180,11 @@ void BleHidKeyboard::SendReport() {
 }
 
 void BleHidKeyboard::SendModifier(uint8_t modifier_bits, bool pressed) {
+    ReportLock lock;
+    if (!lock.locked()) {
+        return;
+    }
+
     if (pressed) {
         report_[0] |= modifier_bits;
     } else {
@@ -159,6 +194,11 @@ void BleHidKeyboard::SendModifier(uint8_t modifier_bits, bool pressed) {
 }
 
 void BleHidKeyboard::TapKey(uint8_t keycode) {
+    ReportLock lock;
+    if (!lock.locked()) {
+        return;
+    }
+
     report_[2] = keycode;
     SendReport();
     vTaskDelay(pdMS_TO_TICKS(50));
