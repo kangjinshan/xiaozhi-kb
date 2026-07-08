@@ -8,6 +8,8 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "app_mode.h"
+#include "keyboard_app.h"
 
 #define TAG "main"
 
@@ -22,6 +24,16 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    // Dispatch based on the app mode stored in NVS
+    AppMode mode = AppModeRead();
+    if (mode == AppMode::kKeyboard) {
+        ESP_LOGI(TAG, "boot -> keyboard app");
+        RunKeyboardApp();  // Runs the BLE keyboard app and never returns
+        return;
+    }
+
+    // kXiaozhi and kSelector (before Task 8) both fall through to xiaozhi
+    ESP_LOGI(TAG, "boot -> xiaozhi");
     // Initialize and run the application
     auto& app = Application::GetInstance();
     app.Initialize();
