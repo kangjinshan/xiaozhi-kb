@@ -14,6 +14,13 @@
 
 #define TAG "ble_hid_kb"
 
+// 官方 esp_hid_device 示例的 GAP 处理（esp_hid_gap.c）在 BLE 认证完成事件里会调用
+// ble_hid_task_start_up() 启动示例自带的发送线程。该函数原本定义在示例 main.c 中，
+// 拷贝 GAP 文件时没有一并带入，全工程无定义。本封装改用 HID 事件回调跟踪连接，不需要
+// 那套发送线程，因此在这里补一个空桩，避免 Task 6 调用 Init() 拉入 GAP 链后出现
+// undefined reference to `ble_hid_task_start_up`。
+extern "C" void ble_hid_task_start_up(void) {}
+
 // 标准键盘 report map（report_id = 1）。
 // 输入 8 字节：[modifier, reserved, key1..key6]；输出 1 字节（LED）。
 // 从 docs/superpowers/reference/esp_hid_device_main.c 的 keyboardReportMap 原样移植（65 字节）。
