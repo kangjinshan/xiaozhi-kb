@@ -8,6 +8,10 @@
 #define HID_MOD_RIGHT_ALT 0x40   // 右 Option (Right Alt/Option)
 #define HID_KEY_BACKSPACE 0x2A
 #define HID_KEY_ENTER     0x28
+#define HID_KEY_ARROW_RIGHT 0x4F
+#define HID_KEY_ARROW_LEFT  0x50
+#define HID_KEY_ARROW_DOWN  0x51
+#define HID_KEY_ARROW_UP    0x52
 
 // BLE HID 标准键盘封装（单例）。
 // 作为标准 BLE HID 键盘被主机（MacBook 等）以 Just Works（无 PIN）方式配对，
