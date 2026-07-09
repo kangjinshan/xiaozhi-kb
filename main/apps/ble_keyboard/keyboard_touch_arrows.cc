@@ -3,9 +3,9 @@
 #include "app_mode.h"
 #include "ble_hid_keyboard.h"
 #include "config.h"
-#include "touch_arrow_mapper.h"
-#include "keyboard_touch_gesture.h"
+#include "keyboard_touch_action.h"
 #include "keyboard_pmic_power_key.h"
+#include "keyboard_zone_display.h"
 
 #include <driver/i2c_master.h>
 #include <esp_err.h>
@@ -32,7 +32,6 @@ constexpr uint8_t kAxp2101Irq1StatusReg = 0x48;
 constexpr uint8_t kAxp2101Irq2EnableReg = 0x41;
 constexpr uint8_t kAxp2101Irq2StatusReg = 0x49;
 constexpr uint8_t kAxp2101Irq3StatusReg = 0x4A;
-
 struct TouchHardware {
     i2c_master_bus_handle_t i2c_bus = nullptr;
     i2c_master_dev_handle_t pmic = nullptr;
@@ -43,21 +42,67 @@ struct TouchHardware {
 struct TouchArrowContext {
     BleHidKeyboard* keyboard;
     TouchHardware hardware;
+    KeyboardProfile profile;
 };
 
-uint8_t HidKeyForDirection(TouchArrowDirection direction) {
-    switch (direction) {
-        case TouchArrowDirection::kUp:
+TouchArrowContext* s_context = nullptr;
+
+uint8_t HidKeyForAction(KeyboardTouchAction action) {
+    switch (action) {
+        case KeyboardTouchAction::kArrowUp:
             return HID_KEY_ARROW_UP;
-        case TouchArrowDirection::kDown:
+        case KeyboardTouchAction::kArrowDown:
             return HID_KEY_ARROW_DOWN;
-        case TouchArrowDirection::kLeft:
+        case KeyboardTouchAction::kArrowLeft:
             return HID_KEY_ARROW_LEFT;
-        case TouchArrowDirection::kRight:
+        case KeyboardTouchAction::kArrowRight:
             return HID_KEY_ARROW_RIGHT;
-        case TouchArrowDirection::kNone:
+        case KeyboardTouchAction::kBackspace:
+            return HID_KEY_BACKSPACE;
+        case KeyboardTouchAction::kEnter:
+            return HID_KEY_ENTER;
         default:
             return 0;
+    }
+}
+
+bool IsRepeatedTapAction(KeyboardTouchAction action) {
+    switch (action) {
+        case KeyboardTouchAction::kArrowUp:
+        case KeyboardTouchAction::kArrowDown:
+        case KeyboardTouchAction::kArrowLeft:
+        case KeyboardTouchAction::kArrowRight:
+        case KeyboardTouchAction::kBackspace:
+        case KeyboardTouchAction::kEnter:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void ReleaseRightOptionIfNeeded(TouchArrowContext* context, bool* right_option_pressed) {
+    if (!*right_option_pressed) {
+        return;
+    }
+    context->keyboard->SendModifier(HID_MOD_RIGHT_ALT, false);
+    *right_option_pressed = false;
+}
+
+void PressRightOptionIfNeeded(TouchArrowContext* context, bool* right_option_pressed) {
+    if (*right_option_pressed) {
+        return;
+    }
+    context->keyboard->SendModifier(HID_MOD_RIGHT_ALT, true);
+    *right_option_pressed = true;
+}
+
+const char* KeyboardProfileName(KeyboardProfile profile) {
+    switch (profile) {
+        case KeyboardProfile::kProfile2:
+            return "profile2";
+        case KeyboardProfile::kProfile1:
+        default:
+            return "profile1";
     }
 }
 
@@ -282,7 +327,7 @@ esp_err_t InitializeTouch(TouchHardware* hardware) {
 
 void TouchArrowTask(void* arg) {
     auto* context = static_cast<TouchArrowContext*>(arg);
-    TouchArrowDirection last_direction = TouchArrowDirection::kNone;
+    KeyboardTouchAction last_tap_action = KeyboardTouchAction::kNone;
     TickType_t last_send_tick = 0;
     TickType_t last_read_warning_tick = 0;
     bool touch_read_failed = false;
@@ -293,6 +338,7 @@ void TouchArrowTask(void* arg) {
     TickType_t last_pmic_warning_tick = 0;
     bool pmic_warning_logged = false;
     bool power_key_short_latched = true;
+    bool right_option_pressed = false;
 
     while (true) {
         const TickType_t now = xTaskGetTickCount();
@@ -303,8 +349,7 @@ void TouchArrowTask(void* arg) {
             &pmic_warning_logged,
             &power_key_short_latched);
 
-        TouchArrowDirection direction = TouchArrowDirection::kNone;
-        bool selector_hot_corner = false;
+        KeyboardTouchAction action = KeyboardTouchAction::kNone;
         esp_err_t err = esp_lcd_touch_read_data(context->hardware.touch);
         if (err == ESP_OK) {
             esp_lcd_touch_point_data_t touch_point = {};
@@ -318,12 +363,8 @@ void TouchArrowTask(void* arg) {
                     touch_read_warning_logged = false;
                 }
                 if (touch_count > 0) {
-                    selector_hot_corner = IsKeyboardSelectorHotCorner(
-                        touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
-                    if (!selector_hot_corner) {
-                        direction = MapTouchPointToArrow(
-                            touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
-                    }
+                    action = MapTouchPointToKeyboardAction(
+                        context->profile, touch_point.x, touch_point.y, LCD_H_RES, LCD_V_RES);
                 }
             } else if (err != ESP_OK) {
                 touch_read_failed = true;
@@ -344,8 +385,9 @@ void TouchArrowTask(void* arg) {
             }
         }
 
-        if (selector_hot_corner) {
-            last_direction = TouchArrowDirection::kNone;
+        if (action == KeyboardTouchAction::kSelector) {
+            ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+            last_tap_action = KeyboardTouchAction::kNone;
             last_send_tick = 0;
             blocked_by_disconnect = false;
 
@@ -369,20 +411,34 @@ void TouchArrowTask(void* arg) {
         selector_hold_start_tick = 0;
         selector_hold_logged = false;
 
-        if (direction == TouchArrowDirection::kNone) {
-            last_direction = TouchArrowDirection::kNone;
+        if (action == KeyboardTouchAction::kNone) {
+            ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+            last_tap_action = KeyboardTouchAction::kNone;
             last_send_tick = 0;
             blocked_by_disconnect = false;
+        } else if (action == KeyboardTouchAction::kRightOption) {
+            last_tap_action = KeyboardTouchAction::kNone;
+            last_send_tick = 0;
+            if (!context->keyboard->IsConnected()) {
+                ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+                blocked_by_disconnect = true;
+            } else {
+                PressRightOptionIfNeeded(context, &right_option_pressed);
+                blocked_by_disconnect = false;
+            }
         } else if (!context->keyboard->IsConnected()) {
+            ReleaseRightOptionIfNeeded(context, &right_option_pressed);
             blocked_by_disconnect = true;
-        } else if (blocked_by_disconnect ||
-                   direction != last_direction ||
+        } else if (IsRepeatedTapAction(action) &&
+                   (blocked_by_disconnect ||
+                   action != last_tap_action ||
                    last_send_tick == 0 ||
-                   now - last_send_tick >= pdMS_TO_TICKS(kRepeatMs)) {
-            const uint8_t hid_key = HidKeyForDirection(direction);
+                   now - last_send_tick >= pdMS_TO_TICKS(kRepeatMs))) {
+            ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+            const uint8_t hid_key = HidKeyForAction(action);
             if (hid_key != 0) {
-                ESP_LOGI(TAG, "touch arrow %s", TouchArrowDirectionName(direction));
-                last_direction = direction;
+                ESP_LOGI(TAG, "touch action %s", KeyboardTouchActionName(action));
+                last_tap_action = action;
                 last_send_tick = now;
                 blocked_by_disconnect = false;
                 context->keyboard->TapKey(hid_key);
@@ -395,7 +451,7 @@ void TouchArrowTask(void* arg) {
 
 }  // namespace
 
-void StartKeyboardTouchArrows(BleHidKeyboard& keyboard) {
+void StartKeyboardTouchArrows(BleHidKeyboard& keyboard, KeyboardProfile profile) {
     static bool started = false;
     static TouchArrowContext context = {};
 
@@ -413,6 +469,8 @@ void StartKeyboardTouchArrows(BleHidKeyboard& keyboard) {
 
     context.keyboard = &keyboard;
     context.hardware = hardware;
+    context.profile = profile;
+    s_context = &context;
 
     BaseType_t task_ok = xTaskCreate(
         TouchArrowTask, "touch_arrows", 4096, &context, 5, nullptr);
@@ -420,9 +478,24 @@ void StartKeyboardTouchArrows(BleHidKeyboard& keyboard) {
         ESP_LOGE(TAG, "failed to create touch arrow task");
         CleanupTouchHardware(&context.hardware);
         context = {};
+        s_context = nullptr;
         return;
     }
 
     started = true;
-    ESP_LOGI(TAG, "touch arrows started");
+    ESP_LOGI(TAG, "touch actions started (%s)", KeyboardProfileName(profile));
+}
+
+void ShowKeyboardTouchZoneGuide() {
+    if (s_context == nullptr || s_context->hardware.pmic == nullptr) {
+        ESP_LOGW(TAG, "keyboard zone guide unavailable: touch hardware not started");
+        return;
+    }
+
+    esp_err_t err = KeyboardZoneDisplayShow(s_context->hardware.pmic);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "keyboard zone guide failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "keyboard zone guide shown");
+    }
 }

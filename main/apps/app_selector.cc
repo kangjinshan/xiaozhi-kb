@@ -21,17 +21,30 @@ namespace {
 
 struct SelectorButtonContext {
     AppMode mode;
+    KeyboardProfile profile;
+    bool has_keyboard_profile;
     const char* log_name;
 };
 
 SelectorButtonContext kXiaozhiContext = {
     .mode = AppMode::kXiaozhi,
+    .profile = KeyboardProfile::kProfile1,
+    .has_keyboard_profile = false,
     .log_name = "xiaozhi",
 };
 
-SelectorButtonContext kKeyboardContext = {
+SelectorButtonContext kKeyboardProfile1Context = {
     .mode = AppMode::kKeyboard,
-    .log_name = "keyboard",
+    .profile = KeyboardProfile::kProfile1,
+    .has_keyboard_profile = true,
+    .log_name = "keyboard_profile_1",
+};
+
+SelectorButtonContext kKeyboardProfile2Context = {
+    .mode = AppMode::kKeyboard,
+    .profile = KeyboardProfile::kProfile2,
+    .has_keyboard_profile = true,
+    .log_name = "keyboard_profile_2",
 };
 
 void OnSelectorButtonClicked(lv_event_t* event) {
@@ -46,6 +59,10 @@ void OnSelectorButtonClicked(lv_event_t* event) {
     }
 
     ESP_LOGI(TAG, "selected %s", context->log_name);
+    if (context->has_keyboard_profile) {
+        AppModeWriteKeyboardAndReboot(context->profile);
+        return;
+    }
     AppModeWriteAndReboot(context->mode);
 }
 
@@ -64,10 +81,10 @@ lv_obj_t* CreateModeButton(lv_obj_t* parent,
                            lv_color_t accent,
                            SelectorButtonContext* context) {
     lv_obj_t* button = lv_button_create(parent);
-    lv_obj_set_size(button, LV_PCT(100), 132);
+    lv_obj_set_size(button, LV_PCT(100), 98);
     SetRoundedPanelStyle(button, lv_color_hex(0x1D222A), accent);
-    lv_obj_set_style_pad_all(button, 18, 0);
-    lv_obj_set_style_pad_column(button, 16, 0);
+    lv_obj_set_style_pad_all(button, 14, 0);
+    lv_obj_set_style_pad_column(button, 14, 0);
     lv_obj_set_flex_flow(button, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(button,
                           LV_FLEX_ALIGN_START,
@@ -76,8 +93,8 @@ lv_obj_t* CreateModeButton(lv_obj_t* parent,
     lv_obj_add_event_cb(button, OnSelectorButtonClicked, LV_EVENT_CLICKED, context);
 
     lv_obj_t* badge_box = lv_obj_create(button);
-    lv_obj_set_size(badge_box, 76, 76);
-    lv_obj_set_style_radius(badge_box, 38, 0);
+    lv_obj_set_size(badge_box, 62, 62);
+    lv_obj_set_style_radius(badge_box, 31, 0);
     lv_obj_set_style_bg_color(badge_box, accent, 0);
     lv_obj_set_style_bg_opa(badge_box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(badge_box, 0, 0);
@@ -121,7 +138,7 @@ void BuildSelectorUI(Display* display) {
     lv_obj_set_style_pad_right(root, 28, 0);
     lv_obj_set_style_pad_top(root, 34, 0);
     lv_obj_set_style_pad_bottom(root, 28, 0);
-    lv_obj_set_style_pad_row(root, 18, 0);
+    lv_obj_set_style_pad_row(root, 12, 0);
     lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(root,
                           LV_FLEX_ALIGN_START,
@@ -149,7 +166,7 @@ void BuildSelectorUI(Display* display) {
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_pad_all(list, 0, 0);
-    lv_obj_set_style_pad_row(list, 18, 0);
+    lv_obj_set_style_pad_row(list, 12, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(list,
                           LV_FLEX_ALIGN_CENTER,
@@ -163,10 +180,15 @@ void BuildSelectorUI(Display* display) {
                      lv_color_hex(0x2E8BFF),
                      &kXiaozhiContext);
     CreateModeButton(list,
-                     "KB",
-                     "蓝牙键盘",
+                     "K1",
+                     "蓝牙键盘 配置1",
                      lv_color_hex(0x26A269),
-                     &kKeyboardContext);
+                     &kKeyboardProfile1Context);
+    CreateModeButton(list,
+                     "K2",
+                     "蓝牙键盘 配置2",
+                     lv_color_hex(0xD0A215),
+                     &kKeyboardProfile2Context);
 }
 
 }  // namespace

@@ -11,6 +11,7 @@
 #define TAG "app_mode"
 static const char* kNs = "appsel";
 static const char* kKey = "mode";
+static const char* kKeyboardProfileKey = "keyboard_profile";
 
 static const char* AppModeToStr(AppMode m) {
     switch (m) {
@@ -36,10 +37,49 @@ AppMode AppModeRead() {
     return AppMode::kSelector;
 }
 
+KeyboardProfile KeyboardProfileRead() {
+    nvs_handle_t h;
+    esp_err_t oerr = nvs_open(kNs, NVS_READONLY, &h);
+    if (oerr != ESP_OK) {
+        return KeyboardProfile::kProfile1;
+    }
+
+    int32_t value = 1;
+    esp_err_t err = nvs_get_i32(h, kKeyboardProfileKey, &value);
+    nvs_close(h);
+
+    if (err != ESP_OK) {
+        return KeyboardProfile::kProfile1;
+    }
+    if (value == static_cast<int32_t>(KeyboardProfile::kProfile2)) {
+        return KeyboardProfile::kProfile2;
+    }
+    return KeyboardProfile::kProfile1;
+}
+
+static void KeyboardProfileWrite(nvs_handle_t h, KeyboardProfile profile) {
+    ESP_ERROR_CHECK(nvs_set_i32(
+        h, kKeyboardProfileKey, static_cast<int32_t>(profile)));
+}
+
 void AppModeWriteAndReboot(AppMode mode) {
     nvs_handle_t h;
     if (nvs_open(kNs, NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_str(h, kKey, AppModeToStr(mode));
+        nvs_commit(h);
+        nvs_close(h);
+    } else {
+        ESP_LOGE(TAG, "nvs_open failed, reboot anyway");
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+}
+
+void AppModeWriteKeyboardAndReboot(KeyboardProfile profile) {
+    nvs_handle_t h;
+    if (nvs_open(kNs, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, kKey, AppModeToStr(AppMode::kKeyboard));
+        KeyboardProfileWrite(h, profile);
         nvs_commit(h);
         nvs_close(h);
     } else {

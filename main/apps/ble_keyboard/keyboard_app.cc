@@ -6,6 +6,7 @@
 #include "config.h"
 #include "ble_hid_keyboard.h"
 #include "keyboard_touch_arrows.h"
+#include "app_mode.h"
 
 #define TAG "keyboard_app"
 
@@ -22,8 +23,9 @@ void RunKeyboardApp() {
     ESP_LOGW(TAG, "DIAG === calling BleHidKeyboard::Init() now ===");
 
     auto& kb = BleHidKeyboard::GetInstance();
+    const KeyboardProfile profile = KeyboardProfileRead();
     kb.Init();
-    StartKeyboardTouchArrows(kb);
+    StartKeyboardTouchArrows(kb, profile);
 
     ESP_LOGW(TAG, "DIAG === Init() returned OK ===");
     for (int i = 0; i < 5; i++) {
@@ -36,15 +38,24 @@ void RunKeyboardApp() {
     left.OnPressDown([&kb]() { kb.SendModifier(HID_MOD_RIGHT_ALT, true); });
     left.OnPressUp([&kb]()  { kb.SendModifier(HID_MOD_RIGHT_ALT, false); });
 
-    // 最右键（BOOT）：单击 = 回车
+    // 最右键（BOOT）：配置1单击=回车；配置2单击=显示触区图。
     static Button right(BOOT_BUTTON_GPIO);
-    right.OnClick([&kb]() { kb.TapKey(HID_KEY_ENTER); });
+    right.OnClick([&kb, profile]() {
+        if (profile == KeyboardProfile::kProfile2) {
+            ShowKeyboardTouchZoneGuide();
+            return;
+        }
+        kb.TapKey(HID_KEY_ENTER);
+    });
 
     kb.SetConnectionCallback([](bool c) {
         ESP_LOGI(TAG, "BLE %s", c ? "connected" : "disconnected");
     });
 
-    ESP_LOGI(TAG, "keyboard app running (left=Right Option, boot=Enter, pwr=Backspace, touch=Arrow keys)");
+    ESP_LOGI(TAG,
+             "keyboard app running (profile=%d, left=Right Option, boot=%s, pwr=Backspace)",
+             static_cast<int>(profile),
+             profile == KeyboardProfile::kProfile2 ? "Zone Guide" : "Enter");
     uint32_t heartbeat = 0;
     while (true) {
         ESP_LOGI(TAG, "keyboard heartbeat #%lu connected=%d", heartbeat++, kb.IsConnected());
