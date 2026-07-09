@@ -38,7 +38,7 @@ void RunKeyboardApp() {
     left.OnPressDown([&kb]() { kb.SendModifier(HID_MOD_RIGHT_ALT, true); });
     left.OnPressUp([&kb]()  { kb.SendModifier(HID_MOD_RIGHT_ALT, false); });
 
-    // 最右键（BOOT）：配置1单击=回车；配置2单击=显示触区图。
+    // 最右键（BOOT）：配置1单击=回车；配置2单击=触区图/黑屏切换。
     static Button right(BOOT_BUTTON_GPIO);
     right.OnClick([&kb, profile]() {
         if (profile == KeyboardProfile::kProfile2) {

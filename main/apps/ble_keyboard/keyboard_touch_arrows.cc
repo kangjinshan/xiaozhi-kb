@@ -492,7 +492,7 @@ void ShowKeyboardTouchZoneGuide() {
         return;
     }
 
-    esp_err_t err = KeyboardZoneDisplayShow(s_context->hardware.pmic);
+    esp_err_t err = KeyboardZoneDisplayToggle(s_context->hardware.pmic);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "keyboard zone guide failed: %s", esp_err_to_name(err));
     } else {

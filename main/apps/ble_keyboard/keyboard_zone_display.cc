@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "esp_lcd_sh8601.h"
+#include "keyboard_zone_display_state.h"
 
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_io.h>
@@ -24,6 +25,7 @@ constexpr uint8_t kAxp2101LdoEnableReg = 0x90;
 constexpr uint8_t kAxp2101Aldo3Mask = 0x04;
 
 bool s_display_initialized = false;
+bool s_guide_visible = false;
 lv_display_t* s_display = nullptr;
 
 static const sh8601_lcd_init_cmd_t kVendorInit[] = {
@@ -256,9 +258,23 @@ void DrawZoneGuide() {
     lvgl_port_unlock();
 }
 
+void DrawBlackScreen() {
+    if (!lvgl_port_lock(30000)) {
+        ESP_LOGW(TAG, "failed to lock lvgl");
+        return;
+    }
+
+    lv_obj_t* screen = lv_screen_active();
+    lv_obj_clean(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    lvgl_port_unlock();
+}
+
 }  // namespace
 
-esp_err_t KeyboardZoneDisplayShow(i2c_master_dev_handle_t pmic) {
+esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic) {
     if (pmic == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -269,6 +285,12 @@ esp_err_t KeyboardZoneDisplayShow(i2c_master_dev_handle_t pmic) {
         return err;
     }
 
-    DrawZoneGuide();
+    const bool next_visible = NextKeyboardZoneGuideVisible(s_guide_visible);
+    if (next_visible) {
+        DrawZoneGuide();
+    } else {
+        DrawBlackScreen();
+    }
+    s_guide_visible = next_visible;
     return ESP_OK;
 }

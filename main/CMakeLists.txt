@@ -48,6 +48,7 @@ list(APPEND SOURCES "apps/ble_keyboard/touch_arrow_mapper.cc")
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_touch_gesture.cc")
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_touch_action.cc")
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_pmic_power_key.cc")
+list(APPEND SOURCES "apps/ble_keyboard/keyboard_zone_display_state.cc")
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_zone_display.cc")
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_touch_arrows.cc")
 # Keyboard app (Task 6): binds 3 physical keys to BLE HID actions
