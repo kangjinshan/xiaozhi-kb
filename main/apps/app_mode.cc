@@ -1,4 +1,5 @@
 #include "app_mode.h"
+#include "app_mode_keys.h"
 #include <cstring>
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -11,7 +12,6 @@
 #define TAG "app_mode"
 static const char* kNs = "appsel";
 static const char* kKey = "mode";
-static const char* kKeyboardProfileKey = "keyboard_profile";
 
 static const char* AppModeToStr(AppMode m) {
     switch (m) {
@@ -45,21 +45,28 @@ KeyboardProfile KeyboardProfileRead() {
     }
 
     int32_t value = 1;
-    esp_err_t err = nvs_get_i32(h, kKeyboardProfileKey, &value);
+    esp_err_t err = nvs_get_i32(h, KeyboardProfileNvsKey(), &value);
     nvs_close(h);
 
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "keyboard profile read failed: %s, default profile1", esp_err_to_name(err));
         return KeyboardProfile::kProfile1;
     }
     if (value == static_cast<int32_t>(KeyboardProfile::kProfile2)) {
+        ESP_LOGI(TAG, "keyboard profile=2");
         return KeyboardProfile::kProfile2;
     }
+    ESP_LOGI(TAG, "keyboard profile=1");
     return KeyboardProfile::kProfile1;
 }
 
 static void KeyboardProfileWrite(nvs_handle_t h, KeyboardProfile profile) {
-    ESP_ERROR_CHECK(nvs_set_i32(
-        h, kKeyboardProfileKey, static_cast<int32_t>(profile)));
+    esp_err_t err = nvs_set_i32(
+        h, KeyboardProfileNvsKey(), static_cast<int32_t>(profile));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "keyboard profile write failed: %s", esp_err_to_name(err));
+    }
+    ESP_ERROR_CHECK(err);
 }
 
 void AppModeWriteAndReboot(AppMode mode) {

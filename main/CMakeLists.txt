@@ -39,6 +39,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 list(APPEND SOURCES "apps/app_mode.cc")
+list(APPEND SOURCES "apps/app_mode_keys.cc")
 list(APPEND SOURCES "apps/app_selector.cc")
 # BLE HID keyboard (Task 5): wrapper + GAP helper (ported from ESP-IDF esp_hid example)
 list(APPEND SOURCES "apps/ble_keyboard/ble_hid_keyboard.cc")
