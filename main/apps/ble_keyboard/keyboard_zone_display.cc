@@ -239,7 +239,7 @@ void DrawZoneGuide() {
     lv_obj_set_grid_dsc_array(grid, cols, rows);
     lv_obj_set_layout(grid, LV_LAYOUT_GRID);
 
-    AddCell(grid, "选择", lv_color_hex(0x22577A), lv_color_hex(0x57CC99), 0, 0);
+    AddCell(grid, "菜单", lv_color_hex(0x22577A), lv_color_hex(0x57CC99), 0, 0);
     AddCell(grid, "上", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 0);
     AddCell(grid, "回车", lv_color_hex(0x7A4E00), lv_color_hex(0xFFD166), 2, 0);
     AddCell(grid, "左", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 0, 1);
