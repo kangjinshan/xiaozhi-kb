@@ -15,6 +15,9 @@
 
 #define TAG "kb_zone_display"
 
+LV_FONT_DECLARE(font_puhui_basic_20_4);
+LV_FONT_DECLARE(font_puhui_basic_30_4);
+
 namespace {
 
 constexpr uint8_t kAxp2101LdoEnableReg = 0x90;
@@ -202,8 +205,11 @@ void AddCell(lv_obj_t* parent,
 
     lv_obj_t* label = lv_label_create(cell);
     lv_label_set_text(label, text);
+    lv_obj_set_width(label, LV_PCT(100));
     lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(label, &font_puhui_basic_30_4, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
     lv_obj_center(label);
 }
 
@@ -221,7 +227,7 @@ void DrawZoneGuide() {
     lv_obj_t* title = lv_label_create(screen);
     lv_label_set_text(title, "PROFILE 2 ZONES");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, LV_FONT_DEFAULT, 0);
+    lv_obj_set_style_text_font(title, &font_puhui_basic_20_4, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
 
     lv_obj_t* grid = lv_obj_create(screen);
