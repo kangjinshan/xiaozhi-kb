@@ -48,6 +48,9 @@ KeyboardTouchAction MapProfile2Point(uint16_t x,
     if (bottom && right) {
         return KeyboardTouchAction::kRightOption;
     }
+    if (!left && !right && !top && !bottom) {
+        return KeyboardTouchAction::kLeftCommand;
+    }
 
     return ArrowToAction(MapTouchPointToArrow(x, y, width, height));
 }
@@ -92,6 +95,8 @@ const char* KeyboardTouchActionName(KeyboardTouchAction action) {
             return "enter";
         case KeyboardTouchAction::kRightOption:
             return "right_option";
+        case KeyboardTouchAction::kLeftCommand:
+            return "left_command";
         case KeyboardTouchAction::kNone:
         default:
             return "none";

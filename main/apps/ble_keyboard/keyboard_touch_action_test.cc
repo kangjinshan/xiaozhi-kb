@@ -65,6 +65,10 @@ int main() {
                  MapTouchPointToKeyboardAction(
                      KeyboardProfile::kProfile2, 470, 240, kWidth, kHeight),
                  KeyboardTouchAction::kArrowRight);
+    ExpectAction("profile2 center is left command",
+                 MapTouchPointToKeyboardAction(
+                     KeyboardProfile::kProfile2, 240, 240, kWidth, kHeight),
+                 KeyboardTouchAction::kLeftCommand);
     ExpectAction("zero width is invalid",
                  MapTouchPointToKeyboardAction(
                      KeyboardProfile::kProfile2, 10, 10, 0, kHeight),

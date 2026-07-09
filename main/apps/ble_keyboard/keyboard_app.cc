@@ -12,8 +12,8 @@
 
 // 蓝牙键盘应用：两个物理键
 //   最左键 GPIO10：按住 = 右 Option（松开释放）
-//   最右键 GPIO9 (BOOT)：单击 = 回车
-//   中间 PWR：单击 = 退格（通过 AXP2101 短按 IRQ 识别）
+//   最右键 GPIO9 (BOOT)：配置1单击=回车；配置2单击=触区图/黑屏切换
+//   中间 PWR：配置1单击=退格；配置2单击=Tab（通过 AXP2101 短按 IRQ 识别）
 void RunKeyboardApp() {
     // ==== 分段诊断：先确认无BLE时日志正常，再测Init ====
     for (int i = 0; i < 5; i++) {
@@ -53,9 +53,10 @@ void RunKeyboardApp() {
     });
 
     ESP_LOGI(TAG,
-             "keyboard app running (profile=%d, left=Right Option, boot=%s, pwr=Backspace)",
+             "keyboard app running (profile=%d, left=Right Option, boot=%s, pwr=%s)",
              static_cast<int>(profile),
-             profile == KeyboardProfile::kProfile2 ? "Zone Guide" : "Enter");
+             profile == KeyboardProfile::kProfile2 ? "Zone Guide" : "Enter",
+             profile == KeyboardProfile::kProfile2 ? "Tab" : "Backspace");
     uint32_t heartbeat = 0;
     while (true) {
         ESP_LOGI(TAG, "keyboard heartbeat #%lu connected=%d", heartbeat++, kb.IsConnected());

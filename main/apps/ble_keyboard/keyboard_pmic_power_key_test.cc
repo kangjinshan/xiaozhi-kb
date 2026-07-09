@@ -1,5 +1,7 @@
 #include "keyboard_pmic_power_key.h"
 
+#include "keyboard_touch_action.h"
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -38,6 +40,20 @@ int main() {
         std::fprintf(stderr,
                      "short press mask: expected 0x08, got 0x%02x\n",
                      Axp2101PowerKeyShortPressMask());
+        return 1;
+    }
+
+    if (PowerKeyShortPressHidKey(KeyboardProfile::kProfile1) != 0x2A) {
+        std::fprintf(stderr,
+                     "profile1 power key short press hid key: expected 0x2A, got 0x%02x\n",
+                     PowerKeyShortPressHidKey(KeyboardProfile::kProfile1));
+        return 1;
+    }
+
+    if (PowerKeyShortPressHidKey(KeyboardProfile::kProfile2) != 0x2B) {
+        std::fprintf(stderr,
+                     "profile2 power key short press hid key: expected 0x2B, got 0x%02x\n",
+                     PowerKeyShortPressHidKey(KeyboardProfile::kProfile2));
         return 1;
     }
 

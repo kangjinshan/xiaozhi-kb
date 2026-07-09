@@ -7,6 +7,8 @@
 
 // USB HID modifier bits / keycodes（与官方 USB HID Usage Tables 一致）
 #define HID_MOD_RIGHT_ALT 0x40   // 右 Option (Right Alt/Option)
+#define HID_MOD_LEFT_GUI  0x08   // 左 Command (Left GUI/Command)
+#define HID_KEY_TAB       0x2B
 #define HID_KEY_BACKSPACE 0x2A
 #define HID_KEY_ENTER     0x28
 #define HID_KEY_ARROW_RIGHT 0x4F

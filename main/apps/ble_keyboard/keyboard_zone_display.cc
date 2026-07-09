@@ -249,7 +249,7 @@ void DrawZoneGuide() {
     AddCell(grid, "UP", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 0);
     AddCell(grid, "ENTER", lv_color_hex(0x7A4E00), lv_color_hex(0xFFD166), 2, 0);
     AddCell(grid, "LEFT", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 0, 1);
-    AddCell(grid, "", lv_color_hex(0x222831), lv_color_hex(0x565F6B), 1, 1);
+    AddCell(grid, "CMD", lv_color_hex(0x222831), lv_color_hex(0xA7C7E7), 1, 1);
     AddCell(grid, "RIGHT", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 2, 1);
     AddCell(grid, "BKSP", lv_color_hex(0x6A1B1A), lv_color_hex(0xFF8A80), 0, 2);
     AddCell(grid, "DOWN", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 2);

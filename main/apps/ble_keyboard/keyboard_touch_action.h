@@ -18,6 +18,7 @@ enum class KeyboardTouchAction : uint8_t {
     kBackspace,
     kEnter,
     kRightOption,
+    kLeftCommand,
 };
 
 KeyboardTouchAction MapTouchPointToKeyboardAction(KeyboardProfile profile,

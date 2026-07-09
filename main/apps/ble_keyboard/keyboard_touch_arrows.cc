@@ -96,6 +96,29 @@ void PressRightOptionIfNeeded(TouchArrowContext* context, bool* right_option_pre
     *right_option_pressed = true;
 }
 
+void ReleaseLeftCommandIfNeeded(TouchArrowContext* context, bool* left_command_pressed) {
+    if (!*left_command_pressed) {
+        return;
+    }
+    context->keyboard->SendModifier(HID_MOD_LEFT_GUI, false);
+    *left_command_pressed = false;
+}
+
+void PressLeftCommandIfNeeded(TouchArrowContext* context, bool* left_command_pressed) {
+    if (*left_command_pressed) {
+        return;
+    }
+    context->keyboard->SendModifier(HID_MOD_LEFT_GUI, true);
+    *left_command_pressed = true;
+}
+
+void ReleaseModifiersIfNeeded(TouchArrowContext* context,
+                              bool* right_option_pressed,
+                              bool* left_command_pressed) {
+    ReleaseRightOptionIfNeeded(context, right_option_pressed);
+    ReleaseLeftCommandIfNeeded(context, left_command_pressed);
+}
+
 const char* KeyboardProfileName(KeyboardProfile profile) {
     switch (profile) {
         case KeyboardProfile::kProfile2:
@@ -219,11 +242,11 @@ esp_err_t InitializeKeyboardPmic(TouchHardware* hardware) {
     return ClearAxp2101IrqStatus(hardware->pmic);
 }
 
-void PollPowerKeyBackspace(TouchArrowContext* context,
-                           TickType_t now,
-                           TickType_t* last_warning_tick,
-                           bool* warning_logged,
-                           bool* short_press_latched) {
+void PollPowerKeyShortcut(TouchArrowContext* context,
+                          TickType_t now,
+                          TickType_t* last_warning_tick,
+                          bool* warning_logged,
+                          bool* short_press_latched) {
     uint8_t irq2_status = 0;
     esp_err_t err = ReadI2cReg(
         context->hardware.pmic, kAxp2101Irq2StatusReg, &irq2_status);
@@ -258,12 +281,13 @@ void PollPowerKeyBackspace(TouchArrowContext* context,
     *short_press_latched = true;
 
     if (!context->keyboard->IsConnected()) {
-        ESP_LOGI(TAG, "pwr backspace skipped: BLE disconnected");
+        ESP_LOGI(TAG, "pwr shortcut skipped: BLE disconnected");
         return;
     }
 
-    ESP_LOGI(TAG, "pwr backspace");
-    context->keyboard->TapKey(HID_KEY_BACKSPACE);
+    const uint8_t hid_key = PowerKeyShortPressHidKey(context->profile);
+    ESP_LOGI(TAG, "pwr key 0x%02x", hid_key);
+    context->keyboard->TapKey(hid_key);
 }
 
 esp_err_t InitializeTouch(TouchHardware* hardware) {
@@ -339,10 +363,11 @@ void TouchArrowTask(void* arg) {
     bool pmic_warning_logged = false;
     bool power_key_short_latched = true;
     bool right_option_pressed = false;
+    bool left_command_pressed = false;
 
     while (true) {
         const TickType_t now = xTaskGetTickCount();
-        PollPowerKeyBackspace(
+        PollPowerKeyShortcut(
             context,
             now,
             &last_pmic_warning_tick,
@@ -386,7 +411,7 @@ void TouchArrowTask(void* arg) {
         }
 
         if (action == KeyboardTouchAction::kSelector) {
-            ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+            ReleaseModifiersIfNeeded(context, &right_option_pressed, &left_command_pressed);
             last_tap_action = KeyboardTouchAction::kNone;
             last_send_tick = 0;
             blocked_by_disconnect = false;
@@ -412,11 +437,12 @@ void TouchArrowTask(void* arg) {
         selector_hold_logged = false;
 
         if (action == KeyboardTouchAction::kNone) {
-            ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+            ReleaseModifiersIfNeeded(context, &right_option_pressed, &left_command_pressed);
             last_tap_action = KeyboardTouchAction::kNone;
             last_send_tick = 0;
             blocked_by_disconnect = false;
         } else if (action == KeyboardTouchAction::kRightOption) {
+            ReleaseLeftCommandIfNeeded(context, &left_command_pressed);
             last_tap_action = KeyboardTouchAction::kNone;
             last_send_tick = 0;
             if (!context->keyboard->IsConnected()) {
@@ -426,8 +452,19 @@ void TouchArrowTask(void* arg) {
                 PressRightOptionIfNeeded(context, &right_option_pressed);
                 blocked_by_disconnect = false;
             }
-        } else if (!context->keyboard->IsConnected()) {
+        } else if (action == KeyboardTouchAction::kLeftCommand) {
             ReleaseRightOptionIfNeeded(context, &right_option_pressed);
+            last_tap_action = KeyboardTouchAction::kNone;
+            last_send_tick = 0;
+            if (!context->keyboard->IsConnected()) {
+                ReleaseLeftCommandIfNeeded(context, &left_command_pressed);
+                blocked_by_disconnect = true;
+            } else {
+                PressLeftCommandIfNeeded(context, &left_command_pressed);
+                blocked_by_disconnect = false;
+            }
+        } else if (!context->keyboard->IsConnected()) {
+            ReleaseModifiersIfNeeded(context, &right_option_pressed, &left_command_pressed);
             blocked_by_disconnect = true;
         } else if (IsRepeatedTapAction(action) &&
                    (blocked_by_disconnect ||
@@ -441,6 +478,7 @@ void TouchArrowTask(void* arg) {
                 last_tap_action = action;
                 last_send_tick = now;
                 blocked_by_disconnect = false;
+                ReleaseLeftCommandIfNeeded(context, &left_command_pressed);
                 context->keyboard->TapKey(hid_key);
             }
         }
