@@ -15,8 +15,6 @@
 
 #define TAG "kb_zone_display"
 
-LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
-
 namespace {
 
 constexpr uint8_t kAxp2101LdoEnableReg = 0x90;
@@ -205,7 +203,7 @@ void AddCell(lv_obj_t* parent,
     lv_obj_t* label = lv_label_create(cell);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(label, &BUILTIN_TEXT_FONT, 0);
+    lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, 0);
     lv_obj_center(label);
 }
 
@@ -221,9 +219,9 @@ void DrawZoneGuide() {
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* title = lv_label_create(screen);
-    lv_label_set_text(title, "配置2 触区");
+    lv_label_set_text(title, "PROFILE 2 ZONES");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, &BUILTIN_TEXT_FONT, 0);
+    lv_obj_set_style_text_font(title, LV_FONT_DEFAULT, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
 
     lv_obj_t* grid = lv_obj_create(screen);
@@ -239,15 +237,15 @@ void DrawZoneGuide() {
     lv_obj_set_grid_dsc_array(grid, cols, rows);
     lv_obj_set_layout(grid, LV_LAYOUT_GRID);
 
-    AddCell(grid, "菜单", lv_color_hex(0x22577A), lv_color_hex(0x57CC99), 0, 0);
-    AddCell(grid, "上", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 0);
-    AddCell(grid, "回车", lv_color_hex(0x7A4E00), lv_color_hex(0xFFD166), 2, 0);
-    AddCell(grid, "左", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 0, 1);
+    AddCell(grid, "MENU", lv_color_hex(0x22577A), lv_color_hex(0x57CC99), 0, 0);
+    AddCell(grid, "UP", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 0);
+    AddCell(grid, "ENTER", lv_color_hex(0x7A4E00), lv_color_hex(0xFFD166), 2, 0);
+    AddCell(grid, "LEFT", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 0, 1);
     AddCell(grid, "", lv_color_hex(0x222831), lv_color_hex(0x565F6B), 1, 1);
-    AddCell(grid, "右", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 2, 1);
-    AddCell(grid, "退格", lv_color_hex(0x6A1B1A), lv_color_hex(0xFF8A80), 0, 2);
-    AddCell(grid, "下", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 2);
-    AddCell(grid, "Option", lv_color_hex(0x4B3869), lv_color_hex(0xC7A4FF), 2, 2);
+    AddCell(grid, "RIGHT", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 2, 1);
+    AddCell(grid, "BKSP", lv_color_hex(0x6A1B1A), lv_color_hex(0xFF8A80), 0, 2);
+    AddCell(grid, "DOWN", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 2);
+    AddCell(grid, "OPT", lv_color_hex(0x4B3869), lv_color_hex(0xC7A4FF), 2, 2);
 
     lvgl_port_unlock();
 }
