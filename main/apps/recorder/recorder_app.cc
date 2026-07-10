@@ -5,6 +5,7 @@
 #include "sdcard.h"
 #include "sdcard_log.h"
 #include "button.h"
+#include "app_mode.h"
 #include "codecs/box_audio_codec.h"
 
 #include <driver/i2c_master.h>
@@ -33,6 +34,8 @@ constexpr int kRecordGain = 12;
 
 // 录音状态：仅最左键回调翻转本标志，文件读写全在录音任务单线程完成（无竞争）。
 volatile bool s_recording = false;
+// 退出录音模式回选择器的请求标志（BOOT 长按置位，主循环检测后收尾并重启）
+volatile bool s_exit = false;
 
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
 i2c_master_dev_handle_t s_pmic = nullptr;
@@ -200,6 +203,14 @@ void RunRecorderApp() {
         ESP_LOGI(TAG, "toggle recording -> %d", (int)s_recording);
     });
 
+    // 最右键（BOOT）长按 = 退出录音模式，回到应用选择器（可再选小智/键盘）。
+    // 用长按而非单击，避免录音时误触退出。
+    static Button boot(BOOT_BUTTON_GPIO);
+    boot.OnLongPress([]() {
+        ESP_LOGI(TAG, "BOOT long press -> exit to selector");
+        s_exit = true;
+    });
+
     // 6. 录音循环：文件读写全在本线程，无并发
     std::vector<int16_t> buf(kFrameSamples * channels);
     FILE* f = nullptr;
@@ -208,6 +219,19 @@ void RunRecorderApp() {
     char cur_path[64] = {0};
 
     while (true) {
+        if (s_exit) {
+            // 退出前若正在录音，先把当前文件收尾保存，避免丢数据
+            if (f != nullptr) {
+                WriteWavHeader(f, sample_rate, channels, 16, data_bytes);
+                fclose(f);
+                f = nullptr;
+            }
+            RecorderShowText("EXIT", "back to menu");
+            ESP_LOGI(TAG, "退出录音模式 -> 选择器");
+            vTaskDelay(pdMS_TO_TICKS(300));
+            AppModeWriteAndReboot(AppMode::kSelector);  // 不返回
+        }
+
         if (s_recording && f == nullptr) {
             // 开始录音：新建文件 + 占位头
             if (!sd_ok || !SdCardIsMounted()) {
