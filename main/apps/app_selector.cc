@@ -147,18 +147,11 @@ void BuildSelectorUI(Display* display) {
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* title = lv_label_create(root);
-    lv_label_set_text(title, "选择应用");
+    lv_label_set_text(title, "Select App");
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &BUILTIN_TEXT_FONT, 0);
-
-    lv_obj_t* subtitle = lv_label_create(root);
-    lv_label_set_text(subtitle, "小智语音 / 录音 / 键盘");
-    lv_obj_set_width(subtitle, LV_PCT(100));
-    lv_obj_set_style_text_align(subtitle, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(subtitle, lv_color_hex(0xA9B1BD), 0);
-    lv_obj_set_style_text_font(subtitle, &BUILTIN_TEXT_FONT, 0);
 
     lv_obj_t* list = lv_obj_create(root);
     lv_obj_set_width(list, LV_PCT(100));
@@ -176,17 +169,17 @@ void BuildSelectorUI(Display* display) {
 
     CreateModeButton(list,
                      "AI",
-                     "小智语音",
+                     "XiaoZhi AI",
                      lv_color_hex(0x2E8BFF),
                      &kXiaozhiContext);
     CreateModeButton(list,
                      "REC",
-                     "录音",
+                     "Recorder",
                      lv_color_hex(0x26A269),
                      &kRecorderContext);
     CreateModeButton(list,
                      "K2",
-                     "蓝牙键盘 配置2",
+                     "Bluetooth KB",
                      lv_color_hex(0xD0A215),
                      &kKeyboardProfile2Context);
 }
