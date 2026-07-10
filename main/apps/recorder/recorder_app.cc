@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <vector>
+#include <mbedtls/base64.h>
 
 #define TAG "recorder_app"
 
@@ -26,6 +27,9 @@ constexpr uint8_t kAxp2101Address = 0x34;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
 const char* kRecDir = "/sdcard/rec";
 constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
+// 录音软件放大倍数：ES7210 裸录的语音幅度偏低（约满量程 0.5%），
+// 乘一个系数放大后写盘，回放才听得清。只作用于录音，不影响小智语音。
+constexpr int kRecordGain = 12;
 
 // 录音状态：仅最左键回调翻转本标志，文件读写全在录音任务单线程完成（无竞争）。
 volatile bool s_recording = false;
@@ -123,6 +127,34 @@ void WriteWavHeader(FILE* f, uint32_t sample_rate, uint16_t channels,
     fwrite(&data_bytes, 4, 1, f);
 }
 
+// 把 WAV 文件经串口 base64 回传（免拔卡即可在电脑端还原分析）。
+// 用固定标记包裹，电脑端脚本据此提取。数据走 printf 直出 stdout，
+// 不经 ESP_LOG（避免被日志 hook 加前缀/写卡）。
+void DumpWavOverSerial(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) {
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long total = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    printf("\n<<<WAV_BEGIN %s %ld>>>\n", path, total);
+    unsigned char in[900];   // 900 是 3 的倍数，base64 不产生跨块填充
+    unsigned char out[1220];
+    size_t n;
+    while ((n = fread(in, 1, sizeof(in), f)) > 0) {
+        size_t olen = 0;
+        if (mbedtls_base64_encode(out, sizeof(out), &olen, in, n) == 0) {
+            fwrite(out, 1, olen, stdout);
+            fputc('\n', stdout);
+        }
+    }
+    fclose(f);
+    printf("<<<WAV_END>>>\n");
+    fflush(stdout);
+}
+
 }  // namespace
 
 void RunRecorderApp() {
@@ -207,6 +239,13 @@ void RunRecorderApp() {
         if (s_recording && f != nullptr) {
             // 读一帧 PCM 并写入
             if (codec.InputData(buf)) {
+                // 软件放大 + 削波保护：语音幅度偏低，放大后回放才清晰
+                for (auto& s : buf) {
+                    int v = (int)s * kRecordGain;
+                    if (v > 32767) v = 32767;
+                    else if (v < -32768) v = -32768;
+                    s = (int16_t)v;
+                }
                 size_t bytes = buf.size() * sizeof(int16_t);
                 fwrite(buf.data(), 1, bytes, f);
                 data_bytes += bytes;
@@ -234,6 +273,7 @@ void RunRecorderApp() {
             char saved[48];
             snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
             RecorderShowText(saved, "saved to card");
+            DumpWavOverSerial(cur_path);  // 串口回传，便于电脑端免拔卡分析
         }
 
         if (!s_recording) {
