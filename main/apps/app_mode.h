@@ -3,7 +3,7 @@
 
 #include "keyboard_touch_action.h"
 
-enum class AppMode { kSelector, kXiaozhi, kKeyboard };
+enum class AppMode { kSelector, kXiaozhi, kKeyboard, kRecorder };
 
 // 读取当前应用模式；NVS 无值或值非法时返回 kSelector。
 AppMode AppModeRead();

@@ -1,0 +1,243 @@
+#include "recorder_app.h"
+#include "recorder_display.h"
+
+#include "config.h"
+#include "sdcard.h"
+#include "sdcard_log.h"
+#include "button.h"
+#include "codecs/box_audio_codec.h"
+
+#include <driver/i2c_master.h>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <vector>
+
+#define TAG "recorder_app"
+
+namespace {
+
+constexpr uint8_t kAxp2101Address = 0x34;
+constexpr i2c_port_t kI2cPort = I2C_NUM_0;
+const char* kRecDir = "/sdcard/rec";
+constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
+
+// 录音状态：仅最左键回调翻转本标志，文件读写全在录音任务单线程完成（无竞争）。
+volatile bool s_recording = false;
+
+i2c_master_bus_handle_t s_i2c_bus = nullptr;
+i2c_master_dev_handle_t s_pmic = nullptr;
+
+esp_err_t WriteReg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val) {
+    const uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(dev, buf, sizeof(buf), 100);
+}
+
+// 建 I2C 总线（I2C_NUM_0, SDA=GPIO8/SCL=GPIO7）+ AXP2101 电源管理，
+// 与键盘模式 InitializeTouch/InitializeKeyboardPmic 一致，保证屏与麦克风都有供电。
+esp_err_t InitI2cAndPmic() {
+    i2c_master_bus_config_t bus_cfg = {};
+    bus_cfg.i2c_port = kI2cPort;
+    bus_cfg.sda_io_num = AUDIO_CODEC_I2C_SDA_PIN;
+    bus_cfg.scl_io_num = AUDIO_CODEC_I2C_SCL_PIN;
+    bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_cfg.glitch_ignore_cnt = 7;
+    bus_cfg.flags.enable_internal_pullup = 1;
+    esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2c bus 初始化失败: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address = kAxp2101Address;
+    dev_cfg.scl_speed_hz = 400 * 1000;
+    err = i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_pmic);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "AXP2101 添加失败: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // AXP2101 供电寄存器序列（与键盘模式 InitializeKeyboardPmic 一致）
+    const struct { uint8_t reg; uint8_t val; } writes[] = {
+        {0x22, 0b00000110}, {0x27, 0x10}, {0x80, 0x01}, {0x90, 0x00}, {0x91, 0x00},
+        {0x82, static_cast<uint8_t>((3300 - 1500) / 100)},
+        {0x92, static_cast<uint8_t>((3300 - 500) / 100)},
+        {0x93, static_cast<uint8_t>((3300 - 500) / 100)},
+        {0x94, static_cast<uint8_t>((3300 - 500) / 100)},
+        {0x95, static_cast<uint8_t>((3300 - 500) / 100)},
+        {0x90, 0x0F}, {0x64, 0x02}, {0x61, 0x02}, {0x62, 0x0A}, {0x63, 0x01},
+    };
+    for (const auto& w : writes) {
+        err = WriteReg(s_pmic, w.reg, w.val);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "AXP2101 写寄存器 0x%02x 失败: %s", w.reg, esp_err_to_name(err));
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
+// 扫描 /sdcard/rec，返回下一个可用 recNNN.wav 序号
+int NextRecIndex() {
+    int max_idx = -1;
+    DIR* dir = opendir(kRecDir);
+    if (dir != nullptr) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            int idx = -1;
+            if (sscanf(ent->d_name, "rec%d.wav", &idx) == 1 && idx > max_idx) {
+                max_idx = idx;
+            }
+        }
+        closedir(dir);
+    }
+    return max_idx + 1;
+}
+
+// 写 44 字节 WAV 头。data_bytes=0 时为占位（录音结束再回填）。
+void WriteWavHeader(FILE* f, uint32_t sample_rate, uint16_t channels,
+                    uint16_t bits, uint32_t data_bytes) {
+    uint32_t byte_rate = sample_rate * channels * (bits / 8);
+    uint16_t block_align = channels * (bits / 8);
+    uint32_t riff_size = 36 + data_bytes;
+    fseek(f, 0, SEEK_SET);
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&riff_size, 4, 1, f);
+    fwrite("WAVE", 1, 4, f);
+    fwrite("fmt ", 1, 4, f);
+    uint32_t fmt_size = 16; fwrite(&fmt_size, 4, 1, f);
+    uint16_t audio_fmt = 1;  fwrite(&audio_fmt, 2, 1, f);   // PCM
+    fwrite(&channels, 2, 1, f);
+    fwrite(&sample_rate, 4, 1, f);
+    fwrite(&byte_rate, 4, 1, f);
+    fwrite(&block_align, 2, 1, f);
+    fwrite(&bits, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&data_bytes, 4, 1, f);
+}
+
+}  // namespace
+
+void RunRecorderApp() {
+    ESP_LOGI(TAG, "recorder app starting");
+
+    // 1. I2C + AXP2101 供电
+    if (InitI2cAndPmic() != ESP_OK) {
+        ESP_LOGE(TAG, "供电初始化失败，录音 app 退化为空转");
+    }
+
+    // 2. 先初始化屏幕（建 SPI2 总线，容忍已建）
+    esp_err_t disp_err = RecorderDisplayInit(s_pmic);
+    if (disp_err != ESP_OK) {
+        ESP_LOGW(TAG, "屏幕初始化失败: %s（录音仍可用，无显示）", esp_err_to_name(disp_err));
+    }
+
+    // 3. 再挂 SD 卡（复用屏已建的 SPI2 总线，own_spi_bus=false）+ 日志落盘
+    bool sd_ok = SdCardMount(false);
+    if (sd_ok) {
+        SdCardLogStart();
+        mkdir(kRecDir, 0777);
+    } else {
+        ESP_LOGE(TAG, "SD 卡挂载失败，无法保存录音");
+    }
+
+    // 4. 音频 codec（读麦克风）
+    BoxAudioCodec codec(s_i2c_bus, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+                        AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
+                        AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN,
+                        AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
+                        AUDIO_INPUT_REFERENCE);
+    codec.EnableInput(true);
+    const int channels = codec.input_channels();
+    const int sample_rate = codec.input_sample_rate();
+    ESP_LOGI(TAG, "codec ready: %d Hz, %d ch", sample_rate, channels);
+
+    RecorderShowText("REC 00:00", sd_ok ? "left key: start" : "NO SD CARD");
+
+    // 5. 最左键单击 = 开始/停止切换（仅翻标志）
+    static Button left(KEY_LEFT_GPIO);
+    left.OnClick([]() {
+        s_recording = !s_recording;
+        ESP_LOGI(TAG, "toggle recording -> %d", (int)s_recording);
+    });
+
+    // 6. 录音循环：文件读写全在本线程，无并发
+    std::vector<int16_t> buf(kFrameSamples * channels);
+    FILE* f = nullptr;
+    uint32_t data_bytes = 0;
+    int64_t last_disp_ms = 0;
+    char cur_path[64] = {0};
+
+    while (true) {
+        if (s_recording && f == nullptr) {
+            // 开始录音：新建文件 + 占位头
+            if (!sd_ok || !SdCardIsMounted()) {
+                RecorderShowText("NO SD CARD", "cannot record");
+                s_recording = false;
+                vTaskDelay(pdMS_TO_TICKS(200));
+                continue;
+            }
+            // 先刷屏，等 LVGL 刷完再动 SD 卡：屏与 SD 卡共用 SPI2 总线，
+            // 时间上错开可避免刷屏与写卡抢总线导致的闪屏（短录音尤其明显）。
+            RecorderShowText("REC 00:00", "recording");
+            vTaskDelay(pdMS_TO_TICKS(60));
+            int idx = NextRecIndex();
+            snprintf(cur_path, sizeof(cur_path), "%s/rec%d.wav", kRecDir, idx);
+            f = fopen(cur_path, "wb");
+            if (f == nullptr) {
+                ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path);
+                RecorderShowText("SAVE FAILED", "write error");
+                s_recording = false;
+                vTaskDelay(pdMS_TO_TICKS(200));
+                continue;
+            }
+            WriteWavHeader(f, sample_rate, channels, 16, 0);
+            data_bytes = 0;
+            last_disp_ms = 0;
+            ESP_LOGI(TAG, "开始录音 -> %s", cur_path);
+        }
+
+        if (s_recording && f != nullptr) {
+            // 读一帧 PCM 并写入
+            if (codec.InputData(buf)) {
+                size_t bytes = buf.size() * sizeof(int16_t);
+                fwrite(buf.data(), 1, bytes, f);
+                data_bytes += bytes;
+
+                // 每约 1 秒刷新一次计时显示
+                uint32_t secs = data_bytes / (sample_rate * channels * sizeof(int16_t));
+                int64_t now_ms = (int64_t)secs * 1000;
+                if (now_ms - last_disp_ms >= 1000) {
+                    last_disp_ms = now_ms;
+                    char t[16];
+                    snprintf(t, sizeof(t), "REC %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
+                    RecorderShowText(t, "left key: stop");
+                }
+            }
+        }
+
+        if (!s_recording && f != nullptr) {
+            // 停止录音：回填头 + 关闭
+            WriteWavHeader(f, sample_rate, channels, 16, data_bytes);
+            fclose(f);
+            f = nullptr;
+            vTaskDelay(pdMS_TO_TICKS(30));  // 让 SD 写操作在总线上落定，再刷屏，避免抢线
+            uint32_t secs = data_bytes / (sample_rate * channels * sizeof(int16_t));
+            ESP_LOGI(TAG, "已保存 %s (%u 秒, %u 字节)", cur_path, (unsigned)secs, (unsigned)data_bytes);
+            char saved[48];
+            snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
+            RecorderShowText(saved, "saved to card");
+        }
+
+        if (!s_recording) {
+            vTaskDelay(pdMS_TO_TICKS(50));  // 空闲时让出 CPU
+        }
+    }
+}

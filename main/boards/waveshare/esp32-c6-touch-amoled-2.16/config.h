@@ -45,4 +45,7 @@
 #define DISPLAY_OFFSET_X  0
 #define DISPLAY_OFFSET_Y  0
 
+// SD 卡（TF 卡）引脚与挂载逻辑见公共模块 main/sdcard/sdcard.cc
+// （SPI 模式，与 AMOLED 屏共用 SPI2_HOST：CLK=0/MOSI=1/MISO=2/CS=6，来自官方原理图）
+
 #endif // _BOARD_CONFIG_H_

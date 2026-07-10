@@ -17,6 +17,7 @@ static const char* AppModeToStr(AppMode m) {
     switch (m) {
         case AppMode::kXiaozhi:  return "xiaozhi";
         case AppMode::kKeyboard: return "keyboard";
+        case AppMode::kRecorder: return "recorder";
         default:                 return "selector";
     }
 }
@@ -34,6 +35,7 @@ AppMode AppModeRead() {
     if (err != ESP_OK) return AppMode::kSelector;
     if (strcmp(buf, "xiaozhi") == 0)  return AppMode::kXiaozhi;
     if (strcmp(buf, "keyboard") == 0) return AppMode::kKeyboard;
+    if (strcmp(buf, "recorder") == 0) return AppMode::kRecorder;
     return AppMode::kSelector;
 }
 

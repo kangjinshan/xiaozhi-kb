@@ -7,6 +7,8 @@
 #include "ble_hid_keyboard.h"
 #include "keyboard_touch_arrows.h"
 #include "app_mode.h"
+#include "sdcard.h"
+#include "sdcard_log.h"
 
 #define TAG "keyboard_app"
 
@@ -26,6 +28,10 @@ void RunKeyboardApp() {
     const KeyboardProfile profile = KeyboardProfileRead();
     kb.Init();
     StartKeyboardTouchArrows(kb, profile);
+
+    // 键盘模式无屏幕，SPI2_HOST 总线空闲，自建总线挂载 SD 卡（own_spi_bus=true）。
+    SdCardMount(true);
+    SdCardLogStart();  // SD 卡就绪后启用日志落盘
 
     ESP_LOGW(TAG, "DIAG === Init() returned OK ===");
     for (int i = 0; i < 5; i++) {

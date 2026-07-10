@@ -76,3 +76,7 @@ CONFIG_LV_USE_WIN=n
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
 
+# SD 卡：启用 FATFS 长文件名（LFN），缓冲放 heap。
+# 否则 FATFS 只支持 8.3 短文件名，录音/日志/图片的长文件名会写入失败。
+CONFIG_FATFS_LFN_HEAP=y
+

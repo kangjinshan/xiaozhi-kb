@@ -12,6 +12,7 @@
 #include "app_mode.h"
 #include "app_selector.h"
 #include "keyboard_app.h"
+#include "recorder_app.h"
 
 #define TAG "main"
 
@@ -60,6 +61,12 @@ extern "C" void app_main(void)
     if (mode == AppMode::kKeyboard) {
         ESP_LOGI(TAG, "boot -> keyboard app");
         RunKeyboardApp();  // Runs the BLE keyboard app and never returns
+        return;
+    }
+
+    if (mode == AppMode::kRecorder) {
+        ESP_LOGI(TAG, "boot -> recorder app");
+        RunRecorderApp();  // Runs the SD-card recorder app and never returns
         return;
     }
 

@@ -15,6 +15,8 @@
 
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
+#include "sdcard.h"
+#include "sdcard_log.h"
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>
@@ -316,6 +318,8 @@ public:
         InitializeAxp2101();
         InitializeSpi();
         InitializeSH8601Display();
+        SdCardMount(false);  // 复用屏幕已初始化的 SPI2_HOST 总线挂载 SD 卡
+        SdCardLogStart();    // SD 卡就绪后启用日志落盘
         InitializeTouch();
         InitializeButtons();
         InitializeTools();

@@ -33,11 +33,11 @@ SelectorButtonContext kXiaozhiContext = {
     .log_name = "xiaozhi",
 };
 
-SelectorButtonContext kKeyboardProfile1Context = {
-    .mode = AppMode::kKeyboard,
-    .profile = KeyboardProfile::kProfile1,
-    .has_keyboard_profile = true,
-    .log_name = "keyboard_profile_1",
+SelectorButtonContext kRecorderContext = {
+    .mode = AppMode::kRecorder,
+    .profile = KeyboardProfile::kProfile1,  // 占位，不使用
+    .has_keyboard_profile = false,
+    .log_name = "recorder",
 };
 
 SelectorButtonContext kKeyboardProfile2Context = {
@@ -154,7 +154,7 @@ void BuildSelectorUI(Display* display) {
     lv_obj_set_style_text_font(title, &BUILTIN_TEXT_FONT, 0);
 
     lv_obj_t* subtitle = lv_label_create(root);
-    lv_label_set_text(subtitle, "小智语音 / 蓝牙键盘");
+    lv_label_set_text(subtitle, "小智语音 / 录音 / 键盘");
     lv_obj_set_width(subtitle, LV_PCT(100));
     lv_obj_set_style_text_align(subtitle, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(subtitle, lv_color_hex(0xA9B1BD), 0);
@@ -180,10 +180,10 @@ void BuildSelectorUI(Display* display) {
                      lv_color_hex(0x2E8BFF),
                      &kXiaozhiContext);
     CreateModeButton(list,
-                     "K1",
-                     "蓝牙键盘 配置1",
+                     "REC",
+                     "录音",
                      lv_color_hex(0x26A269),
-                     &kKeyboardProfile1Context);
+                     &kRecorderContext);
     CreateModeButton(list,
                      "K2",
                      "蓝牙键盘 配置2",

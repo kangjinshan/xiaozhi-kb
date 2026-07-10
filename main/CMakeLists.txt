@@ -54,7 +54,15 @@ list(APPEND SOURCES "apps/ble_keyboard/keyboard_touch_arrows.cc")
 # Keyboard app (Task 6): binds 3 physical keys to BLE HID actions
 list(APPEND SOURCES "apps/ble_keyboard/keyboard_app.cc")
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps" "apps/ble_keyboard")
+# SD card (TF card) shared mount module — used by both xiaozhi and keyboard modes
+list(APPEND SOURCES "sdcard/sdcard.cc")
+list(APPEND SOURCES "sdcard/sdcard_log.cc")
+
+# Recorder app — standalone SD-card voice recorder mode
+list(APPEND SOURCES "apps/recorder/recorder_app.cc")
+list(APPEND SOURCES "apps/recorder/recorder_display.cc")
+
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps" "apps/ble_keyboard" "sdcard" "apps/recorder")
 
 # Add board common files
 list(APPEND SOURCES
