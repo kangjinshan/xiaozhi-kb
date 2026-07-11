@@ -52,9 +52,14 @@ bool RecorderParseWavHeader(const uint8_t* header, size_t len, RecorderWavInfo* 
     return true;
 }
 
-bool RecorderWavMatchesCodec(const RecorderWavInfo& info, int sample_rate, int channels) {
-    return info.sample_rate == static_cast<uint32_t>(sample_rate) &&
-           info.channels == static_cast<uint16_t>(channels) &&
+bool RecorderWavCanPlay(const RecorderWavInfo& info,
+                        int output_sample_rate,
+                        int output_channels) {
+    const bool supported_rate =
+        info.sample_rate == 16000 ||
+        info.sample_rate == static_cast<uint32_t>(output_sample_rate);
+    return supported_rate &&
+           info.channels == static_cast<uint16_t>(output_channels) &&
            info.bits_per_sample == 16 &&
            info.data_offset == 44 &&
            info.data_bytes > 0;

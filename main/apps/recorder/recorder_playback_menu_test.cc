@@ -97,7 +97,7 @@ void TestCanonicalWavHeaderIsAccepted() {
     Check(info.bits_per_sample == 16, "bits parsed");
     Check(info.data_offset == 44, "canonical data offset parsed");
     Check(info.data_bytes == 48000, "data bytes parsed");
-    Check(RecorderWavMatchesCodec(info, 24000, 1), "recorder wav matches codec");
+    Check(RecorderWavCanPlay(info, 24000, 1), "recorder wav is playable");
 }
 
 void TestUnsupportedWavHeaderIsRejected() {
@@ -106,9 +106,17 @@ void TestUnsupportedWavHeaderIsRejected() {
     RecorderWavInfo info = {};
     Check(!RecorderParseWavHeader(header, sizeof(header), &info), "float wav is rejected");
 
-    BuildCanonicalWav(header, 1, 2, 24000, 16, 48000);
-    Check(!RecorderWavMatchesCodec(
-              RecorderWavInfo{24000, 2, 16, 44, 48000}, 24000, 1),
+    Check(RecorderWavCanPlay(
+              RecorderWavInfo{24000, 1, 16, 44, 48000}, 24000, 1),
+          "native 24k wav is playable");
+    Check(RecorderWavCanPlay(
+              RecorderWavInfo{16000, 1, 16, 44, 32000}, 24000, 1),
+          "enhanced 16k wav is playable through resampler");
+    Check(!RecorderWavCanPlay(
+              RecorderWavInfo{22050, 1, 16, 44, 44100}, 24000, 1),
+          "unsupported sample rate is rejected");
+    Check(!RecorderWavCanPlay(
+              RecorderWavInfo{16000, 2, 16, 44, 64000}, 24000, 1),
           "channel mismatch is rejected");
 }
 

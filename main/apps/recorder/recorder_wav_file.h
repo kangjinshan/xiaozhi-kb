@@ -13,6 +13,8 @@ struct RecorderWavInfo {
 };
 
 bool RecorderParseWavHeader(const uint8_t* header, size_t len, RecorderWavInfo* info);
-bool RecorderWavMatchesCodec(const RecorderWavInfo& info, int sample_rate, int channels);
+bool RecorderWavCanPlay(const RecorderWavInfo& info,
+                        int output_sample_rate,
+                        int output_channels);
 
 #endif  // RECORDER_WAV_FILE_H_

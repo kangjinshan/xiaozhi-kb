@@ -8,6 +8,7 @@
 #include "codecs/box_audio_codec.h"
 #include "recorder_file_list.h"
 #include "recorder_noise_reducer.h"
+#include "recorder_rate_converter.h"
 #include "recorder_wav_file.h"
 
 #include <driver/i2c_master.h>
@@ -239,8 +240,17 @@ bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
     RecorderWavInfo info = {};
     if (header_bytes != sizeof(header) ||
         !RecorderParseWavHeader(header, sizeof(header), &info) ||
-        !RecorderWavMatchesCodec(info, codec.output_sample_rate(), codec.output_channels())) {
+        !RecorderWavCanPlay(info, codec.output_sample_rate(), codec.output_channels())) {
         ESP_LOGE(TAG, "不支持播放的 WAV: %s", path);
+        fclose(playback);
+        return false;
+    }
+
+    RecorderRateConverter playback_rate(info.sample_rate, codec.output_sample_rate());
+    if (!playback_rate.valid()) {
+        ESP_LOGE(TAG, "播放重采样器初始化失败: %u -> %d",
+                 static_cast<unsigned>(info.sample_rate),
+                 codec.output_sample_rate());
         fclose(playback);
         return false;
     }
@@ -273,7 +283,23 @@ bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
         }
         remaining -= bytes;
         playback_buf.resize(bytes / sizeof(int16_t));
-        codec.OutputData(playback_buf);
+        std::vector<int16_t> converted;
+        if (!playback_rate.Process(playback_buf, &converted)) {
+            ok = false;
+            break;
+        }
+        if (!converted.empty()) {
+            codec.OutputData(converted);
+        }
+    }
+
+    if (!s_recording && !s_exit) {
+        std::vector<int16_t> converted;
+        if (!playback_rate.Flush(&converted)) {
+            ok = false;
+        } else if (!converted.empty()) {
+            codec.OutputData(converted);
+        }
     }
 
     codec.EnableOutput(false);
