@@ -16,7 +16,6 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include "sdcard.h"
-#include "sdcard_log.h"
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>
@@ -318,8 +317,19 @@ public:
         InitializeAxp2101();
         InitializeSpi();
         InitializeSH8601Display();
-        SdCardMount(false);  // 复用屏幕已初始化的 SPI2_HOST 总线挂载 SD 卡
-        SdCardLogStart();    // SD 卡就绪后启用日志落盘
+        // AMOLED 和 SD 卡共用 SPI2。显示创建后 LVGL 会立即提交首帧，
+        // 必须等该任务停下并持有 LVGL 锁后才能开始 SDSPI 初始化；否则
+        // 两个驱动会同时改写 SPI 硬件并触发 spi_hal_setup_trans 断言。
+        lvgl_port_stop();
+        if (lvgl_port_lock(30000)) {
+            // 小智系统事件任务栈很小，不能安装同步写 FAT 的日志 hook；
+            // Wi-Fi 扫描日志会经 SdCardLogVprintf 写卡并触发栈保护故障。
+            SdCardMount(false);
+            lvgl_port_unlock();
+        } else {
+            ESP_LOGW(TAG, "Skip SD card mount: failed to pause display refresh");
+        }
+        lvgl_port_resume();
         InitializeTouch();
         InitializeButtons();
         InitializeTools();
