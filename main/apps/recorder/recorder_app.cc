@@ -137,6 +137,32 @@ void WriteWavHeader(FILE* f, uint32_t sample_rate, uint16_t channels,
     fwrite(&data_bytes, 4, 1, f);
 }
 
+bool AppendPcm(FILE* file, const std::vector<int16_t>& samples, uint32_t* data_bytes) {
+    if (file == nullptr || data_bytes == nullptr) {
+        return false;
+    }
+    const size_t bytes = samples.size() * sizeof(int16_t);
+    if (bytes == 0) {
+        return true;
+    }
+    if (fwrite(samples.data(), 1, bytes, file) != bytes) {
+        return false;
+    }
+    *data_bytes += static_cast<uint32_t>(bytes);
+    return true;
+}
+
+bool FinishRecording(FILE* file,
+                     RecorderNoiseReducer* reducer,
+                     uint32_t* data_bytes) {
+    std::vector<int16_t> tail;
+    if (!reducer->Flush(&tail) || !AppendPcm(file, tail, data_bytes)) {
+        return false;
+    }
+    WriteWavHeader(file, reducer->output_sample_rate(), 1, 16, *data_bytes);
+    return std::fflush(file) == 0;
+}
+
 // 把 WAV 文件经串口 base64 回传（免拔卡即可在电脑端还原分析）。
 // 用固定标记包裹，电脑端脚本据此提取。数据走 printf 直出 stdout，
 // 不经 ESP_LOG（避免被日志 hook 加前缀/写卡）。
@@ -350,8 +376,18 @@ void RunRecorderApp() {
     const int sample_rate = codec.input_sample_rate();
     ESP_LOGI(TAG, "codec ready: %d Hz, %d ch", sample_rate, channels);
     RecorderNoiseReducer noise_reducer(sample_rate);
+    ESP_LOGI(TAG, "recorder DSP: input=%d output=%d ns=%s",
+             sample_rate,
+             noise_reducer.output_sample_rate(),
+             noise_reducer.noise_reduction_enabled() ? "enabled" : "unavailable");
 
-    RecorderShowText("REC 00:00", sd_ok ? "left key: start" : "NO SD CARD");
+    const char* idle_subtitle = noise_reducer.noise_reduction_enabled()
+        ? "NS READY / left: start"
+        : "NS OFF / left: start";
+    if (!noise_reducer.valid()) {
+        idle_subtitle = "NS FAILED";
+    }
+    RecorderShowText("REC 00:00", sd_ok ? idle_subtitle : "NO SD CARD");
     RecorderDisplaySetPlayMenuVisible(sd_ok);
     RecorderDisplayResume();
 
@@ -374,6 +410,7 @@ void RunRecorderApp() {
     std::vector<int16_t> buf(kFrameSamples * channels);
     FILE* f = nullptr;
     uint32_t data_bytes = 0;
+    bool recording_failed = false;
     int64_t last_disp_ms = 0;
     char cur_path[64] = {0};
 
@@ -381,7 +418,13 @@ void RunRecorderApp() {
         if (s_exit) {
             // 退出前若正在录音，先把当前文件收尾保存，避免丢数据
             if (f != nullptr) {
-                WriteWavHeader(f, sample_rate, channels, 16, data_bytes);
+                const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
+                                      !recording_failed;
+                if (!saved_ok) {
+                    ESP_LOGE(TAG, "退出时录音保存失败: %s", cur_path);
+                    RecorderShowText("SAVE FAILED", "write error");
+                    RecorderDisplayResume();
+                }
                 fclose(f);
                 f = nullptr;
             }
@@ -404,9 +447,22 @@ void RunRecorderApp() {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
+            if (!noise_reducer.valid() || !noise_reducer.Reset()) {
+                ESP_LOGE(TAG, "录音 DSP 初始化/复位失败");
+                RecorderShowText("NS FAILED", "cannot record");
+                s_recording = false;
+                RecorderDisplaySetPlayMenuVisible(sd_ok);
+                RecorderDisplayResume();
+                vTaskDelay(pdMS_TO_TICKS(200));
+                continue;
+            }
+            if (!noise_reducer.noise_reduction_enabled()) {
+                ESP_LOGW(TAG, "ESP-SR NS unavailable; recording will only be resampled");
+            }
             // 先刷屏，等 LVGL 刷完再动 SD 卡：屏与 SD 卡共用 SPI2 总线，
             // 时间上错开可避免刷屏与写卡抢总线导致的闪屏（短录音尤其明显）。
-            RecorderShowText("REC 00:00", "recording");
+            RecorderShowText("REC 00:00",
+                             noise_reducer.noise_reduction_enabled() ? "recording" : "NS OFF");
             FlushDisplayThenPause();
             int idx = NextRecIndex();
             snprintf(cur_path, sizeof(cur_path), "%s/rec%d.wav", kRecDir, idx);
@@ -420,8 +476,9 @@ void RunRecorderApp() {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
-            WriteWavHeader(f, sample_rate, channels, 16, 0);
+            WriteWavHeader(f, noise_reducer.output_sample_rate(), 1, 16, 0);
             data_bytes = 0;
+            recording_failed = false;
             last_disp_ms = 0;
             ESP_LOGI(TAG, "开始录音 -> %s", cur_path);
         }
@@ -429,13 +486,17 @@ void RunRecorderApp() {
         if (s_recording && f != nullptr) {
             // 读一帧 PCM 并写入
             if (codec.InputData(buf)) {
-                noise_reducer.Process(buf);
-                size_t bytes = buf.size() * sizeof(int16_t);
-                fwrite(buf.data(), 1, bytes, f);
-                data_bytes += bytes;
+                std::vector<int16_t> processed;
+                if (!noise_reducer.Process(buf, &processed) ||
+                    !AppendPcm(f, processed, &data_bytes)) {
+                    ESP_LOGE(TAG, "录音 DSP/写入失败: %s", cur_path);
+                    s_recording = false;
+                    recording_failed = true;
+                }
 
                 // 每约 1 秒刷新一次计时显示
-                uint32_t secs = data_bytes / (sample_rate * channels * sizeof(int16_t));
+                uint32_t secs = data_bytes /
+                    (noise_reducer.output_sample_rate() * sizeof(int16_t));
                 int64_t now_ms = (int64_t)secs * 1000;
                 if (now_ms - last_disp_ms >= 1000) {
                     last_disp_ms = now_ms;
@@ -449,11 +510,20 @@ void RunRecorderApp() {
 
         if (!s_recording && f != nullptr) {
             // 停止录音：回填头 + 关闭
-            WriteWavHeader(f, sample_rate, channels, 16, data_bytes);
+            const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
+                                  !recording_failed;
             fclose(f);
             f = nullptr;
             vTaskDelay(pdMS_TO_TICKS(30));  // 让 SD 写操作在总线上落定，再刷屏，避免抢线
-            uint32_t secs = data_bytes / (sample_rate * channels * sizeof(int16_t));
+            uint32_t secs = data_bytes /
+                (noise_reducer.output_sample_rate() * sizeof(int16_t));
+            if (!saved_ok) {
+                ESP_LOGE(TAG, "录音保存失败: %s", cur_path);
+                RecorderShowText("SAVE FAILED", "write error");
+                RecorderDisplaySetPlayMenuVisible(sd_ok);
+                RecorderDisplayResume();
+                continue;
+            }
             ESP_LOGI(TAG, "已保存 %s (%u 秒, %u 字节)", cur_path, (unsigned)secs, (unsigned)data_bytes);
             char saved[48];
             snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
@@ -461,7 +531,7 @@ void RunRecorderApp() {
             RecorderDisplaySetPlayMenuVisible(false);
             FlushDisplayThenPause();
             DumpWavOverSerial(cur_path);  // 串口回传，便于电脑端免拔卡分析
-            RecorderShowText(saved, "tap PLAY");
+            RecorderShowText(saved, idle_subtitle);
             RecorderDisplaySetPlayMenuVisible(true);
             RecorderDisplayResume();
         }
