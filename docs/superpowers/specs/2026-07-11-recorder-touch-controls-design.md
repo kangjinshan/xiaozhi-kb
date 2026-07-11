@@ -93,6 +93,24 @@ for a stream. This matches Espressif's fixed maximum-buffer example and keeps
 a short final input block from undersizing the output buffer when the library
 emits cached samples.
 
+## SPI2-Safe Touch Recording
+
+The touchscreen must remain active so `STOP` and `MENU` can be detected while
+recording, but WAV writes still cannot overlap an LVGL flush. Each microphone
+block therefore follows this order:
+
+1. Keep LVGL running while waiting for microphone PCM and processing DSP.
+2. Pause LVGL before appending processed PCM to the WAV.
+3. Update elapsed-time text while LVGL is paused.
+4. Resume LVGL immediately after the bounded SD write.
+5. Consume touch and physical-key requests before reading the next block.
+
+At the 1024-sample microphone block size, touch requests are serviced at least
+once per roughly 43 ms of captured 24 kHz audio, plus DSP and bounded write
+time. Starting, stopping, finalizing, and serial-dumping a recording keep LVGL
+paused for the complete SD operation and resume it only after the operation is
+safe.
+
 ## Error and Interruption Handling
 
 - A touch `STOP` uses the same reducer flush, WAV-header rewrite, and save
