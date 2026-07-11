@@ -7,6 +7,7 @@
 #include "app_mode.h"
 #include "codecs/box_audio_codec.h"
 #include "recorder_file_list.h"
+#include "recorder_control_state.h"
 #include "recorder_noise_reducer.h"
 #include "recorder_rate_converter.h"
 #include "recorder_wav_file.h"
@@ -21,6 +22,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <algorithm>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -34,18 +36,18 @@ constexpr uint8_t kAxp2101Address = 0x34;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
 const char* kRecDir = "/sdcard/rec";
 constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
-
-// 录音状态：仅最左键回调翻转本标志，文件读写全在录音任务单线程完成（无竞争）。
-volatile bool s_recording = false;
-// 退出录音模式回选择器的请求标志（BOOT 长按置位，主循环检测后收尾并重启）
-volatile bool s_exit = false;
+constexpr size_t kPlaybackReadSamples = 4096;
 
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
 i2c_master_dev_handle_t s_pmic = nullptr;
-std::mutex s_ui_request_mutex;
-bool s_menu_requested = false;
-bool s_play_requested = false;
-std::string s_requested_play_path;
+
+struct RecorderRequest {
+    RecorderControlEvent event;
+    std::string path;
+};
+
+std::mutex s_request_mutex;
+std::deque<RecorderRequest> s_requests;
 
 esp_err_t WriteReg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val) {
     const uint8_t buf[2] = {reg, val};
@@ -191,39 +193,45 @@ void DumpWavOverSerial(const char* path) {
     fflush(stdout);
 }
 
+void PublishRequest(RecorderControlEvent event, const char* path = nullptr) {
+    std::lock_guard<std::mutex> lock(s_request_mutex);
+    s_requests.push_back({event, path != nullptr ? path : ""});
+}
+
+bool TakeRequest(RecorderRequest* request) {
+    std::lock_guard<std::mutex> lock(s_request_mutex);
+    if (request == nullptr || s_requests.empty()) {
+        return false;
+    }
+    *request = std::move(s_requests.front());
+    s_requests.pop_front();
+    return true;
+}
+
+void OnRecordRequested(void*) {
+    PublishRequest(RecorderControlEvent::kTouchRecord);
+}
+
+void OnStopRequested(void*) {
+    PublishRequest(RecorderControlEvent::kTouchStop);
+}
+
 void OnOpenPlaybackMenu(void*) {
-    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
-    s_menu_requested = true;
+    PublishRequest(RecorderControlEvent::kTouchPlay);
+}
+
+void OnPauseResumeRequested(void*) {
+    PublishRequest(RecorderControlEvent::kTouchPauseResume);
+}
+
+void OnExitRequested(void*) {
+    PublishRequest(RecorderControlEvent::kExitRequested);
 }
 
 void OnPlayFileRequested(const char* path, void*) {
-    if (path == nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
-    s_requested_play_path = path;
-    s_play_requested = true;
-}
-
-bool TakeMenuRequest() {
-    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
-    if (!s_menu_requested) {
-        return false;
-    }
-    s_menu_requested = false;
-    return true;
-}
-
-bool TakePlayRequest(std::string* path) {
-    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
-    if (!s_play_requested) {
-        return false;
-    }
-    s_play_requested = false;
     if (path != nullptr) {
-        *path = s_requested_play_path;
+        PublishRequest(RecorderControlEvent::kPlaybackSelected, path);
     }
-    return true;
 }
 
 const char* Basename(const char* path) {
@@ -232,6 +240,46 @@ const char* Basename(const char* path) {
     }
     const char* slash = strrchr(path, '/');
     return slash != nullptr ? slash + 1 : path;
+}
+
+RecorderDisplayState ToDisplayState(RecorderControlMode mode) {
+    switch (mode) {
+        case RecorderControlMode::kIdle:
+            return RecorderDisplayState::kIdle;
+        case RecorderControlMode::kRecording:
+            return RecorderDisplayState::kRecording;
+        case RecorderControlMode::kPlaying:
+            return RecorderDisplayState::kPlaying;
+        case RecorderControlMode::kPaused:
+            return RecorderDisplayState::kPaused;
+    }
+    return RecorderDisplayState::kIdle;
+}
+
+RecorderControlAction ApplyRequest(const RecorderRequest& request,
+                                   RecorderControlState* control,
+                                   BoxAudioCodec* codec,
+                                   bool* exit_requested) {
+    RecorderControlAction action = RecorderControlReduce(control, request.event);
+    if (action == RecorderControlAction::kVolumeChanged && codec != nullptr) {
+        codec->SetOutputVolume(control->volume);
+        RecorderDisplaySetState(ToDisplayState(control->mode), control->volume);
+    } else if (action == RecorderControlAction::kPausePlayback ||
+               action == RecorderControlAction::kResumePlayback) {
+        RecorderDisplaySetState(ToDisplayState(control->mode), control->volume);
+    } else if (action == RecorderControlAction::kExit && exit_requested != nullptr) {
+        *exit_requested = true;
+    }
+    return action;
+}
+
+void DrainPlaybackRequests(RecorderControlState* control,
+                           BoxAudioCodec* codec,
+                           bool* exit_requested) {
+    RecorderRequest request;
+    while (TakeRequest(&request)) {
+        ApplyRequest(request, control, codec, exit_requested);
+    }
 }
 
 void FlushDisplayThenPause(uint32_t ms = 90) {
@@ -254,11 +302,22 @@ void ShowPlaybackMenu() {
     RecorderDisplayShowFileMenu(menu_items);
 }
 
-bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
+enum class PlaybackResult {
+    kDone,
+    kFailed,
+    kInterrupted,
+};
+
+// Caller enters with LVGL paused. Every return path leaves exactly one pause
+// held so file close and the caller's result-screen update stay SPI2-safe.
+PlaybackResult PlayWavFile(BoxAudioCodec& codec,
+                           const char* path,
+                           RecorderControlState* control,
+                           bool* exit_requested) {
     FILE* playback = fopen(path, "rb");
     if (playback == nullptr) {
         ESP_LOGE(TAG, "无法打开播放文件 %s", path);
-        return false;
+        return PlaybackResult::kFailed;
     }
 
     uint8_t header[44];
@@ -269,7 +328,7 @@ bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
         !RecorderWavCanPlay(info, codec.output_sample_rate(), codec.output_channels())) {
         ESP_LOGE(TAG, "不支持播放的 WAV: %s", path);
         fclose(playback);
-        return false;
+        return PlaybackResult::kFailed;
     }
 
     RecorderRateConverter playback_rate(info.sample_rate, codec.output_sample_rate());
@@ -278,31 +337,42 @@ bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
                  static_cast<unsigned>(info.sample_rate),
                  codec.output_sample_rate());
         fclose(playback);
-        return false;
+        return PlaybackResult::kFailed;
     }
 
     if (fseek(playback, info.data_offset, SEEK_SET) != 0) {
         fclose(playback);
-        return false;
+        return PlaybackResult::kFailed;
     }
 
     ESP_LOGI(TAG, "播放 %s (%u bytes)", path, (unsigned)info.data_bytes);
-    RecorderShowText("PLAYING", Basename(path));
+    RecorderShowText("PLAYING", nullptr);
     RecorderDisplayHideFileMenu();
-    RecorderDisplaySetPlayMenuVisible(false);
-    FlushDisplayThenPause();
+    RecorderDisplaySetState(RecorderDisplayState::kPlaying, control->volume);
+    RecorderDisplayResume();
     codec.EnableOutput(true);
 
     bool ok = true;
     uint32_t remaining = info.data_bytes;
-    const size_t capacity_samples = kFrameSamples * info.channels;
+    const size_t capacity_samples = kPlaybackReadSamples * info.channels;
     std::vector<int16_t> playback_buf(capacity_samples);
-    while (remaining > 0 && !s_exit && !s_recording) {
+    while (remaining > 0 && !*exit_requested) {
+        DrainPlaybackRequests(control, &codec, exit_requested);
+        if (*exit_requested) {
+            break;
+        }
+        if (control->mode == RecorderControlMode::kPaused) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
         playback_buf.resize(capacity_samples);
         const size_t to_read = std::min(
             static_cast<size_t>(remaining),
             playback_buf.size() * sizeof(int16_t));
+        RecorderDisplayPause();
         const size_t bytes = fread(playback_buf.data(), 1, to_read, playback);
+        RecorderDisplayResume();
         if (bytes == 0) {
             ok = false;
             break;
@@ -317,9 +387,17 @@ bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
         if (!converted.empty()) {
             codec.OutputData(converted);
         }
+        DrainPlaybackRequests(control, &codec, exit_requested);
     }
 
-    if (!s_recording && !s_exit) {
+    while (control->mode == RecorderControlMode::kPaused && !*exit_requested) {
+        DrainPlaybackRequests(control, &codec, exit_requested);
+        if (control->mode == RecorderControlMode::kPaused && !*exit_requested) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+
+    if (ok && remaining == 0 && !*exit_requested) {
         std::vector<int16_t> converted;
         if (!playback_rate.Flush(&converted)) {
             ok = false;
@@ -328,13 +406,16 @@ bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
         }
     }
 
+    RecorderDisplayPause();
     codec.EnableOutput(false);
     fclose(playback);
-    if (s_recording || s_exit) {
+    if (*exit_requested) {
         ESP_LOGI(TAG, "播放中断: %s", path);
-        return false;
+        return PlaybackResult::kInterrupted;
     }
-    return ok && remaining == 0;
+    return ok && remaining == 0
+        ? PlaybackResult::kDone
+        : PlaybackResult::kFailed;
 }
 
 }  // namespace
@@ -352,7 +433,14 @@ void RunRecorderApp() {
     if (disp_err != ESP_OK) {
         ESP_LOGW(TAG, "屏幕初始化失败: %s（录音仍可用，无显示）", esp_err_to_name(disp_err));
     }
-    RecorderDisplaySetCallbacks(OnOpenPlaybackMenu, OnPlayFileRequested, nullptr);
+    RecorderDisplayCallbacks display_callbacks;
+    display_callbacks.record = OnRecordRequested;
+    display_callbacks.stop = OnStopRequested;
+    display_callbacks.open_menu = OnOpenPlaybackMenu;
+    display_callbacks.pause_resume = OnPauseResumeRequested;
+    display_callbacks.exit = OnExitRequested;
+    display_callbacks.play_file = OnPlayFileRequested;
+    RecorderDisplaySetCallbacks(display_callbacks, nullptr);
     RecorderDisplayPause();
 
     // 3. 再挂 SD 卡（复用屏已建的 SPI2 总线，own_spi_bus=false）
@@ -382,48 +470,65 @@ void RunRecorderApp() {
              noise_reducer.noise_reduction_enabled() ? "enabled" : "unavailable");
 
     const char* idle_subtitle = noise_reducer.noise_reduction_enabled()
-        ? "NS READY / left: start"
-        : "NS OFF / left: start";
+        ? "NS READY / tap REC"
+        : "NS OFF / tap REC";
     if (!noise_reducer.valid()) {
         idle_subtitle = "NS FAILED";
     }
+    RecorderControlState control{RecorderControlMode::kIdle, codec.output_volume()};
     RecorderShowText("REC 00:00", sd_ok ? idle_subtitle : "NO SD CARD");
-    RecorderDisplaySetPlayMenuVisible(sd_ok);
+    RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
     RecorderDisplayResume();
 
-    // 5. 最左键单击 = 开始/停止切换（仅翻标志）
+    // 5. 实体键只发布事件；状态 reducer 决定当前是否接受。
     static Button left(KEY_LEFT_GPIO);
     left.OnClick([]() {
-        s_recording = !s_recording;
-        ESP_LOGI(TAG, "toggle recording -> %d", (int)s_recording);
+        PublishRequest(RecorderControlEvent::kPhysicalLeft);
     });
 
-    // 最右键（BOOT）长按 = 退出录音模式，回到应用选择器（可再选小智/键盘）。
-    // 用长按而非单击，避免录音时误触退出。
-    static Button boot(BOOT_BUTTON_GPIO);
-    boot.OnLongPress([]() {
-        ESP_LOGI(TAG, "BOOT long press -> exit to selector");
-        s_exit = true;
+    static Button right(BOOT_BUTTON_GPIO);
+    right.OnClick([]() {
+        PublishRequest(RecorderControlEvent::kPhysicalRight);
     });
 
-    // 6. 录音循环：文件读写全在本线程，无并发
+    // 6. 所有文件、DSP 与 codec 操作都留在本任务。
     std::vector<int16_t> buf(kFrameSamples * channels);
     FILE* f = nullptr;
     uint32_t data_bytes = 0;
     bool recording_failed = false;
+    bool exit_requested = false;
     int64_t last_disp_ms = 0;
     char cur_path[64] = {0};
 
+    auto process_requests = [&](bool* open_menu, std::string* play_path) {
+        RecorderRequest request;
+        while (TakeRequest(&request)) {
+            RecorderControlAction action =
+                ApplyRequest(request, &control, &codec, &exit_requested);
+            if (action == RecorderControlAction::kOpenPlaybackMenu &&
+                open_menu != nullptr) {
+                *open_menu = true;
+            } else if (action == RecorderControlAction::kStartPlayback &&
+                       play_path != nullptr) {
+                *play_path = request.path;
+            }
+        }
+    };
+
     while (true) {
-        if (s_exit) {
+        bool open_menu = false;
+        std::string play_path;
+        process_requests(&open_menu, &play_path);
+
+        if (exit_requested) {
             // 退出前若正在录音，先把当前文件收尾保存，避免丢数据
+            RecorderDisplayPause();
             if (f != nullptr) {
                 const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
                                       !recording_failed;
                 if (!saved_ok) {
                     ESP_LOGE(TAG, "退出时录音保存失败: %s", cur_path);
                     RecorderShowText("SAVE FAILED", "write error");
-                    RecorderDisplayResume();
                 }
                 fclose(f);
                 f = nullptr;
@@ -435,24 +540,46 @@ void RunRecorderApp() {
             AppModeWriteAndReboot(AppMode::kSelector);  // 不返回
         }
 
-        if (s_recording && f == nullptr) {
+        if (open_menu && control.mode == RecorderControlMode::kIdle && f == nullptr) {
+            RecorderDisplayPause();
+            ShowPlaybackMenu();
+            RecorderDisplayResume();
+        }
+
+        if (!play_path.empty() &&
+            control.mode == RecorderControlMode::kPlaying && f == nullptr) {
+            RecorderDisplayPause();
+            const PlaybackResult result =
+                PlayWavFile(codec, play_path.c_str(), &control, &exit_requested);
+            RecorderControlReduce(&control, RecorderControlEvent::kPlaybackFinished);
+            RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+            if (!exit_requested) {
+                if (result == PlaybackResult::kDone) {
+                    RecorderShowText("PLAY DONE", Basename(play_path.c_str()));
+                } else if (result == PlaybackResult::kFailed) {
+                    RecorderShowText("PLAY FAILED", "check wav");
+                }
+            }
+            RecorderDisplayResume();
+            continue;
+        }
+
+        if (control.mode == RecorderControlMode::kRecording && f == nullptr) {
             // 开始录音：新建文件 + 占位头
             RecorderDisplayHideFileMenu();
-            RecorderDisplaySetPlayMenuVisible(false);
+            RecorderDisplaySetState(RecorderDisplayState::kRecording, control.volume);
             if (!sd_ok || !SdCardIsMounted()) {
                 RecorderShowText("NO SD CARD", "cannot record");
-                s_recording = false;
-                RecorderDisplaySetPlayMenuVisible(sd_ok);
-                RecorderDisplayResume();
+                control.mode = RecorderControlMode::kIdle;
+                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
             if (!noise_reducer.valid() || !noise_reducer.Reset()) {
                 ESP_LOGE(TAG, "录音 DSP 初始化/复位失败");
                 RecorderShowText("NS FAILED", "cannot record");
-                s_recording = false;
-                RecorderDisplaySetPlayMenuVisible(sd_ok);
-                RecorderDisplayResume();
+                control.mode = RecorderControlMode::kIdle;
+                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
@@ -470,8 +597,8 @@ void RunRecorderApp() {
             if (f == nullptr) {
                 ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path);
                 RecorderShowText("SAVE FAILED", "write error");
-                s_recording = false;
-                RecorderDisplaySetPlayMenuVisible(sd_ok);
+                control.mode = RecorderControlMode::kIdle;
+                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
                 RecorderDisplayResume();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
@@ -481,16 +608,21 @@ void RunRecorderApp() {
             recording_failed = false;
             last_disp_ms = 0;
             ESP_LOGI(TAG, "开始录音 -> %s", cur_path);
+            RecorderDisplayResume();
         }
 
-        if (s_recording && f != nullptr) {
+        if (control.mode == RecorderControlMode::kRecording && f != nullptr) {
             // 读一帧 PCM 并写入
             if (codec.InputData(buf)) {
                 std::vector<int16_t> processed;
-                if (!noise_reducer.Process(buf, &processed) ||
-                    !AppendPcm(f, processed, &data_bytes)) {
+                bool block_ok = noise_reducer.Process(buf, &processed);
+                RecorderDisplayPause();
+                if (block_ok) {
+                    block_ok = AppendPcm(f, processed, &data_bytes);
+                }
+                if (!block_ok) {
                     ESP_LOGE(TAG, "录音 DSP/写入失败: %s", cur_path);
-                    s_recording = false;
+                    control.mode = RecorderControlMode::kIdle;
                     recording_failed = true;
                 }
 
@@ -502,14 +634,19 @@ void RunRecorderApp() {
                     last_disp_ms = now_ms;
                     char t[16];
                     snprintf(t, sizeof(t), "REC %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
-                    RecorderShowText(t, "left key: stop");
-                    FlushDisplayThenPause(70);
+                    RecorderShowText(t, "tap STOP to save");
                 }
+                RecorderDisplayResume();
+            }
+            process_requests(nullptr, nullptr);
+            if (exit_requested) {
+                continue;
             }
         }
 
-        if (!s_recording && f != nullptr) {
+        if (control.mode != RecorderControlMode::kRecording && f != nullptr) {
             // 停止录音：回填头 + 关闭
+            RecorderDisplayPause();
             const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
                                   !recording_failed;
             fclose(f);
@@ -520,7 +657,7 @@ void RunRecorderApp() {
             if (!saved_ok) {
                 ESP_LOGE(TAG, "录音保存失败: %s", cur_path);
                 RecorderShowText("SAVE FAILED", "write error");
-                RecorderDisplaySetPlayMenuVisible(sd_ok);
+                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
                 RecorderDisplayResume();
                 continue;
             }
@@ -528,40 +665,13 @@ void RunRecorderApp() {
             char saved[48];
             snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
             RecorderShowText(saved, "sending");
-            RecorderDisplaySetPlayMenuVisible(false);
-            FlushDisplayThenPause();
             DumpWavOverSerial(cur_path);  // 串口回传，便于电脑端免拔卡分析
             RecorderShowText(saved, idle_subtitle);
-            RecorderDisplaySetPlayMenuVisible(true);
+            RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
             RecorderDisplayResume();
         }
 
-        if (!s_recording && f == nullptr && TakeMenuRequest()) {
-            RecorderDisplayPause();
-            ShowPlaybackMenu();
-            RecorderDisplayResume();
-        }
-
-        if (!s_recording && f == nullptr) {
-            std::string play_path;
-            if (TakePlayRequest(&play_path) && !play_path.empty()) {
-                RecorderDisplayPause();
-                const bool played = PlayWavFile(codec, play_path.c_str());
-                if (s_recording || s_exit) {
-                    RecorderDisplayResume();
-                } else if (played) {
-                    RecorderShowText("PLAY DONE", Basename(play_path.c_str()));
-                } else if (!s_recording && !s_exit) {
-                    RecorderShowText("PLAY FAILED", "check wav");
-                }
-                if (!s_recording && !s_exit && sd_ok) {
-                    RecorderDisplaySetPlayMenuVisible(true);
-                    RecorderDisplayResume();
-                }
-            }
-        }
-
-        if (!s_recording) {
+        if (control.mode == RecorderControlMode::kIdle) {
             vTaskDelay(pdMS_TO_TICKS(50));  // 空闲时让出 CPU
         }
     }

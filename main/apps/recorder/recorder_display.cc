@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "esp_lcd_sh8601.h"
+#include "recorder_control_state.h"
 
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_io.h>
@@ -15,6 +16,8 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -35,13 +38,19 @@ esp_lcd_panel_io_handle_t s_touch_io = nullptr;
 esp_lcd_touch_handle_t s_touch = nullptr;
 lv_obj_t* s_title_label = nullptr;
 lv_obj_t* s_subtitle_label = nullptr;
+lv_obj_t* s_menu_button = nullptr;
+lv_obj_t* s_record_button = nullptr;
 lv_obj_t* s_play_button = nullptr;
+lv_obj_t* s_action_button = nullptr;
+lv_obj_t* s_action_label = nullptr;
 lv_obj_t* s_file_menu = nullptr;
 lv_obj_t* s_file_list = nullptr;
 lv_obj_t* s_empty_label = nullptr;
-RecorderDisplayCallback s_open_menu_callback = nullptr;
-RecorderDisplayFileCallback s_play_file_callback = nullptr;
+RecorderDisplayCallbacks s_callbacks;
+RecorderDisplayState s_display_state = RecorderDisplayState::kIdle;
 void* s_callback_user_data = nullptr;
+uint32_t s_menu_pressed_tick = 0;
+bool s_menu_hold_fired = false;
 std::vector<std::string> s_file_paths;
 
 // SH8601 厂商初始化命令表（与键盘模式一致）
@@ -90,21 +99,58 @@ esp_err_t ResetDisplayPower(i2c_master_dev_handle_t pmic) {
 }
 
 void OnPlayMenuClicked(lv_event_t* event) {
-    if (lv_event_get_code(event) != LV_EVENT_CLICKED || s_open_menu_callback == nullptr) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED || s_callbacks.open_menu == nullptr) {
         return;
     }
-    s_open_menu_callback(s_callback_user_data);
+    s_callbacks.open_menu(s_callback_user_data);
+}
+
+void OnRecordClicked(lv_event_t* event) {
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED && s_callbacks.record != nullptr) {
+        s_callbacks.record(s_callback_user_data);
+    }
+}
+
+void OnActionClicked(lv_event_t* event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (s_display_state == RecorderDisplayState::kRecording) {
+        if (s_callbacks.stop != nullptr) {
+            s_callbacks.stop(s_callback_user_data);
+        }
+    } else if ((s_display_state == RecorderDisplayState::kPlaying ||
+                s_display_state == RecorderDisplayState::kPaused) &&
+               s_callbacks.pause_resume != nullptr) {
+        s_callbacks.pause_resume(s_callback_user_data);
+    }
+}
+
+void OnMenuEvent(lv_event_t* event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        s_menu_pressed_tick = lv_tick_get();
+        s_menu_hold_fired = false;
+    } else if (code == LV_EVENT_PRESSING && !s_menu_hold_fired &&
+               RecorderMenuHoldReached(s_menu_pressed_tick, lv_tick_get())) {
+        s_menu_hold_fired = true;
+        if (s_callbacks.exit != nullptr) {
+            s_callbacks.exit(s_callback_user_data);
+        }
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        s_menu_hold_fired = false;
+    }
 }
 
 void OnFileClicked(lv_event_t* event) {
-    if (lv_event_get_code(event) != LV_EVENT_CLICKED || s_play_file_callback == nullptr) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED || s_callbacks.play_file == nullptr) {
         return;
     }
     auto* path = static_cast<std::string*>(lv_event_get_user_data(event));
     if (path == nullptr) {
         return;
     }
-    s_play_file_callback(path->c_str(), s_callback_user_data);
+    s_callbacks.play_file(path->c_str(), s_callback_user_data);
 }
 
 void OnBackClicked(lv_event_t* event) {
@@ -303,12 +349,37 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
         lv_obj_set_style_text_font(s_subtitle_label, &font_puhui_basic_20_4, 0);
         lv_obj_align(s_subtitle_label, LV_ALIGN_CENTER, 0, -12);
 
+        s_menu_button = lv_button_create(screen);
+        lv_obj_set_size(s_menu_button, 100, 48);
+        lv_obj_align(s_menu_button, LV_ALIGN_TOP_LEFT, 18, 18);
+        StyleButton(s_menu_button, lv_color_hex(0x2B313B), lv_color_hex(0x8792A2));
+        lv_obj_add_event_cb(s_menu_button, OnMenuEvent, LV_EVENT_ALL, nullptr);
+        CreateButtonLabel(s_menu_button, "MENU", &font_puhui_basic_20_4);
+
+        s_record_button = lv_button_create(screen);
+        lv_obj_set_size(s_record_button, 170, 58);
+        lv_obj_align(s_record_button, LV_ALIGN_CENTER, -100, 66);
+        StyleButton(s_record_button, lv_color_hex(0xA72F3B), lv_color_hex(0xFF7A86));
+        lv_obj_add_event_cb(s_record_button, OnRecordClicked, LV_EVENT_CLICKED, nullptr);
+        CreateButtonLabel(s_record_button, "REC", &font_puhui_basic_20_4);
+
         s_play_button = lv_button_create(screen);
-        lv_obj_set_size(s_play_button, 180, 58);
-        lv_obj_align(s_play_button, LV_ALIGN_CENTER, 0, 66);
+        lv_obj_set_size(s_play_button, 170, 58);
+        lv_obj_align(s_play_button, LV_ALIGN_CENTER, 100, 66);
         StyleButton(s_play_button, lv_color_hex(0x238A54), lv_color_hex(0x69DB9C));
         lv_obj_add_event_cb(s_play_button, OnPlayMenuClicked, LV_EVENT_CLICKED, nullptr);
         CreateButtonLabel(s_play_button, "PLAY", &font_puhui_basic_20_4);
+
+        s_action_button = lv_button_create(screen);
+        lv_obj_set_size(s_action_button, 210, 62);
+        lv_obj_align(s_action_button, LV_ALIGN_CENTER, 0, 70);
+        StyleButton(s_action_button, lv_color_hex(0x9A6B18), lv_color_hex(0xF2C45E));
+        lv_obj_add_event_cb(s_action_button, OnActionClicked, LV_EVENT_CLICKED, nullptr);
+        s_action_label = CreateButtonLabel(
+            s_action_button, "STOP", &font_puhui_basic_20_4);
+        lv_obj_add_flag(s_action_button, LV_OBJ_FLAG_HIDDEN);
+
+        lv_obj_add_flag(s_record_button, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_play_button, LV_OBJ_FLAG_HIDDEN);
 
         s_file_menu = lv_obj_create(screen);
@@ -339,8 +410,17 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
                               LV_FLEX_ALIGN_CENTER);
         lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
+        lv_obj_t* menu_spacer = lv_obj_create(header);
+        lv_obj_set_size(menu_spacer, 100, 1);
+        lv_obj_set_style_bg_opa(menu_spacer, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(menu_spacer, 0, 0);
+        lv_obj_set_style_pad_all(menu_spacer, 0, 0);
+        lv_obj_clear_flag(menu_spacer, LV_OBJ_FLAG_SCROLLABLE);
+
         lv_obj_t* menu_title = lv_label_create(header);
         lv_label_set_text(menu_title, "Recordings");
+        lv_obj_set_flex_grow(menu_title, 1);
+        lv_obj_set_style_text_align(menu_title, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(menu_title, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(menu_title, &font_puhui_basic_30_4, 0);
 
@@ -368,6 +448,7 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
         lv_obj_set_style_text_font(s_empty_label, &font_puhui_basic_20_4, 0);
 
         lv_obj_add_flag(s_file_menu, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_menu_button);
 
         lvgl_port_unlock();
     }
@@ -391,27 +472,59 @@ void RecorderShowText(const char* title, const char* subtitle) {
     lvgl_port_unlock();
 }
 
-void RecorderDisplaySetCallbacks(RecorderDisplayCallback open_menu,
-                                 RecorderDisplayFileCallback play_file,
+void RecorderDisplaySetCallbacks(const RecorderDisplayCallbacks& callbacks,
                                  void* user_data) {
-    s_open_menu_callback = open_menu;
-    s_play_file_callback = play_file;
+    s_callbacks = callbacks;
     s_callback_user_data = user_data;
 }
 
-void RecorderDisplaySetPlayMenuVisible(bool visible) {
-    if (!s_display_initialized || s_play_button == nullptr) {
+void RecorderDisplaySetState(RecorderDisplayState state, int volume) {
+    if (!s_display_initialized || s_record_button == nullptr ||
+        s_play_button == nullptr || s_action_button == nullptr) {
         return;
     }
     if (!lvgl_port_lock(30000)) {
         ESP_LOGW(TAG, "failed to lock lvgl");
         return;
     }
-    if (visible) {
-        lv_obj_remove_flag(s_play_button, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_play_button, LV_OBJ_FLAG_HIDDEN);
+
+    s_display_state = state;
+    lv_obj_add_flag(s_record_button, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_play_button, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_action_button, LV_OBJ_FLAG_HIDDEN);
+
+    switch (state) {
+        case RecorderDisplayState::kIdle:
+            lv_obj_remove_flag(s_record_button, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_play_button, LV_OBJ_FLAG_HIDDEN);
+            break;
+
+        case RecorderDisplayState::kRecording:
+            lv_label_set_text(s_action_label, "STOP");
+            StyleButton(s_action_button,
+                        lv_color_hex(0xA72F3B), lv_color_hex(0xFF7A86));
+            lv_obj_remove_flag(s_action_button, LV_OBJ_FLAG_HIDDEN);
+            SetFileMenuVisible(false);
+            break;
+
+        case RecorderDisplayState::kPlaying:
+        case RecorderDisplayState::kPaused: {
+            lv_label_set_text(
+                s_action_label,
+                state == RecorderDisplayState::kPlaying ? "PAUSE" : "RESUME");
+            StyleButton(s_action_button,
+                        lv_color_hex(0x9A6B18), lv_color_hex(0xF2C45E));
+            lv_obj_remove_flag(s_action_button, LV_OBJ_FLAG_HIDDEN);
+            SetFileMenuVisible(false);
+            char volume_text[16];
+            std::snprintf(volume_text, sizeof(volume_text),
+                          "VOL %d", std::clamp(volume, 0, 100));
+            lv_label_set_text(s_subtitle_label, volume_text);
+            lv_obj_align(s_subtitle_label, LV_ALIGN_CENTER, 0, -12);
+            break;
+        }
     }
+    lv_obj_move_foreground(s_menu_button);
     lvgl_port_unlock();
 }
 
@@ -505,6 +618,7 @@ void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& ite
     }
 
     SetFileMenuVisible(true);
+    lv_obj_move_foreground(s_menu_button);
     lvgl_port_unlock();
 }
 
