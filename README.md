@@ -128,6 +128,10 @@
 | 下 | `DOWN` | 方向键下 |
 | 右下 | `OPT` | 按住右 Option |
 
+配置2 触区图真机效果（中间 `CMD` 区在实机上显示为默认底色）：
+
+![配置2 触区图](docs/images/profile2-zones.png)
+
 相关代码：
 
 - `main/apps/ble_keyboard/keyboard_app.cc`
