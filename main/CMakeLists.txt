@@ -62,6 +62,7 @@ list(APPEND SOURCES "sdcard/sdcard_log.cc")
 list(APPEND SOURCES "apps/recorder/recorder_app.cc")
 list(APPEND SOURCES "apps/recorder/recorder_display.cc")
 list(APPEND SOURCES "apps/recorder/recorder_file_list.cc")
+list(APPEND SOURCES "apps/recorder/recorder_rate_converter.cc")
 list(APPEND SOURCES "apps/recorder/recorder_noise_reducer.cc")
 list(APPEND SOURCES "apps/recorder/recorder_wav_file.cc")
 
