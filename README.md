@@ -156,12 +156,13 @@
 
 录音模式是一个独立应用（不走小智 `Application`），自己初始化屏幕、音频 codec 和 SD 卡：
 
-- **最左键 GPIO10 单击**：开始 / 停止录音切换。
-- **最右键 BOOT 长按 2 秒**：退出录音模式，返回开机选择界面（退出前会先把当前录音收尾保存）。
+- 空闲时点屏幕 `REC` 开始录音，录音时点 `STOP` 保存；录音期间实体键禁用。
+- 点 `PLAY` 选择录音；播放时点 `PAUSE` / `RESUME`，左键音量 +10，右键音量 -10（范围 0–100）。
+- 在任意录音界面持续按住左上角 `MENU` 2 秒返回应用选择界面；短按不会退出，退出前会先收尾当前录音。
 - 屏幕显示录音状态（`REC mm:ss` / `SAVED mm:ss`，英文以规避字库缺字）。
 - 屏幕 `PLAY` 按钮会打开录音文件菜单，按最新序号倒序显示 `/sdcard/rec/recN.wav`，点击任一录音即可播放。
-- 录音保存为 WAV（单声道 / 16bit / 24000Hz）到 `/sdcard/rec/recN.wav`。
-- ES7210 裸录语音幅度偏低，录音写盘前会经过降噪增强和限幅保护；ESP32-C6 上禁用不稳定的 ESP-SR NS，使用软件噪声门 / 增益 / 限幅兜底。
+- 新录音保存为 WAV（单声道 / 16bit / 16000Hz）到 `/sdcard/rec/recN.wav`；播放器同时兼容旧 24000Hz 和新 16000Hz 文件。
+- 录音链路把 ES7210 的 24000Hz PCM 用小智同款 `esp_ae_rate_cvt` 转为 16000Hz，再按 10ms 帧调用 ESP-SR `ns_create` / `ns_process`，最后进行固定增益和限幅。
 
 因 ESP32-C6 只有 USB-Serial-JTAG、无 USB-OTG，**无法把 SD 卡模拟成 U 盘**。为便于免拔卡取回录音，录音停止后会通过串口 base64 回传该 WAV（用 `<<<WAV_BEGIN ...>>> / <<<WAV_END>>>` 标记包裹），配合主机端脚本即可还原文件。
 
@@ -313,8 +314,27 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
+  main/apps/recorder/recorder_control_state_test.cc \
+  main/apps/recorder/recorder_control_state.cc \
+  -o /tmp/recorder_control_state_test && /tmp/recorder_control_state_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_display_area_test.cc \
+  main/apps/recorder/recorder_display_area.cc \
+  -o /tmp/recorder_display_area_test && /tmp/recorder_display_area_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_rate_converter_test.cc \
+  main/apps/recorder/recorder_rate_converter.cc \
+  -o /tmp/recorder_rate_converter_test && /tmp/recorder_rate_converter_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
   main/apps/recorder/recorder_noise_reducer_test.cc \
   main/apps/recorder/recorder_noise_reducer.cc \
+  main/apps/recorder/recorder_rate_converter.cc \
   -o /tmp/recorder_noise_reducer_test && /tmp/recorder_noise_reducer_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
