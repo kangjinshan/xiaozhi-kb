@@ -3,6 +3,7 @@
 #include "config.h"
 #include "esp_lcd_sh8601.h"
 #include "recorder_control_state.h"
+#include "recorder_display_area.h"
 
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_io.h>
@@ -52,6 +53,24 @@ void* s_callback_user_data = nullptr;
 uint32_t s_menu_pressed_tick = 0;
 bool s_menu_hold_fired = false;
 std::vector<std::string> s_file_paths;
+
+void OnInvalidateArea(lv_event_t* event) {
+    auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
+    if (area == nullptr) {
+        return;
+    }
+    RecorderDisplayArea rounded = {
+        .x1 = area->x1,
+        .y1 = area->y1,
+        .x2 = area->x2,
+        .y2 = area->y2,
+    };
+    RecorderRoundDisplayArea(&rounded);
+    area->x1 = rounded.x1;
+    area->y1 = rounded.y1;
+    area->x2 = rounded.x2;
+    area->y2 = rounded.y2;
+}
 
 // SH8601 厂商初始化命令表（与键盘模式一致）
 static const sh8601_lcd_init_cmd_t kVendorInit[] = {
@@ -323,6 +342,8 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
         return ESP_FAIL;
     }
     lv_display_set_default(s_display);
+    lv_display_add_event_cb(
+        s_display, OnInvalidateArea, LV_EVENT_INVALIDATE_AREA, nullptr);
 
     err = InitTouch(i2c_bus);
     if (err != ESP_OK) {

@@ -61,6 +61,7 @@ list(APPEND SOURCES "sdcard/sdcard_log.cc")
 # Recorder app — standalone SD-card voice recorder mode
 list(APPEND SOURCES "apps/recorder/recorder_app.cc")
 list(APPEND SOURCES "apps/recorder/recorder_display.cc")
+list(APPEND SOURCES "apps/recorder/recorder_display_area.cc")
 list(APPEND SOURCES "apps/recorder/recorder_control_state.cc")
 list(APPEND SOURCES "apps/recorder/recorder_file_list.cc")
 list(APPEND SOURCES "apps/recorder/recorder_rate_converter.cc")
