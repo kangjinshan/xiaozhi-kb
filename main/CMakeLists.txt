@@ -61,6 +61,9 @@ list(APPEND SOURCES "sdcard/sdcard_log.cc")
 # Recorder app — standalone SD-card voice recorder mode
 list(APPEND SOURCES "apps/recorder/recorder_app.cc")
 list(APPEND SOURCES "apps/recorder/recorder_display.cc")
+list(APPEND SOURCES "apps/recorder/recorder_file_list.cc")
+list(APPEND SOURCES "apps/recorder/recorder_noise_reducer.cc")
+list(APPEND SOURCES "apps/recorder/recorder_wav_file.cc")
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps" "apps/ble_keyboard" "sdcard" "apps/recorder")
 

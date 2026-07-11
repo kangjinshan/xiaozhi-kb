@@ -159,8 +159,9 @@
 - **最左键 GPIO10 单击**：开始 / 停止录音切换。
 - **最右键 BOOT 长按 2 秒**：退出录音模式，返回开机选择界面（退出前会先把当前录音收尾保存）。
 - 屏幕显示录音状态（`REC mm:ss` / `SAVED mm:ss`，英文以规避字库缺字）。
+- 屏幕 `PLAY` 按钮会打开录音文件菜单，按最新序号倒序显示 `/sdcard/rec/recN.wav`，点击任一录音即可播放。
 - 录音保存为 WAV（单声道 / 16bit / 24000Hz）到 `/sdcard/rec/recN.wav`。
-- ES7210 裸录语音幅度偏低，固件对录音做了软件放大（约 12 倍）+ 削波保护，回放才清晰。
+- ES7210 裸录语音幅度偏低，录音写盘前会经过降噪增强和限幅保护；ESP32-C6 上禁用不稳定的 ESP-SR NS，使用软件噪声门 / 增益 / 限幅兜底。
 
 因 ESP32-C6 只有 USB-Serial-JTAG、无 USB-OTG，**无法把 SD 卡模拟成 U 盘**。为便于免拔卡取回录音，录音停止后会通过串口 base64 回传该 WAV（用 `<<<WAV_BEGIN ...>>> / <<<WAV_END>>>` 标记包裹），配合主机端脚本即可还原文件。
 
@@ -168,12 +169,15 @@
 
 - `main/apps/recorder/recorder_app.cc`
 - `main/apps/recorder/recorder_display.cc`
+- `docs/recorder-design-guardrails.md`（录音新功能设计前必读，记录 SPI2 / ESP-SR 真机坑）
 
 ### 6. SD 卡挂载与日志落盘
 
 - **挂载**：`main/sdcard/sdcard.cc` 提供 `SdCardMount(bool own_spi_bus)`，SPI 模式挂载到 `/sdcard`。
   SD 卡与 AMOLED 屏共用 SPI2 总线：小智模式复用屏幕已建总线（`own_spi_bus=false`），
   键盘 / 录音模式按需自建或复用。挂载后有开机读写自检。
+- **录音模式特别注意**：AMOLED 屏和 SD 卡共用 SPI2，录音模式在 SD 大块读写时必须暂停 LVGL 刷屏；
+  recorder 模式也不要启用 SD 日志落盘，否则任意日志写卡都可能与屏幕刷新并发。
 - **日志落盘**：`main/sdcard/sdcard_log.cc` 通过 `esp_log_set_vprintf` 把系统日志在串口输出的同时
   写入 `/sdcard/log/bootN.log`（去 ANSI 色码、限流、写失败自动降级为只走串口）。
 - **图片等文件**：卡挂载后 `/sdcard` 即标准 FATFS，可直接用文件接口存取；与固件的 assets 分区
@@ -306,6 +310,19 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/ble_keyboard/keyboard_pmic_power_key_test.cc \
   main/apps/ble_keyboard/keyboard_pmic_power_key.cc \
   -o /tmp/keyboard_pmic_power_key_test && /tmp/keyboard_pmic_power_key_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_noise_reducer_test.cc \
+  main/apps/recorder/recorder_noise_reducer.cc \
+  -o /tmp/recorder_noise_reducer_test && /tmp/recorder_noise_reducer_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_playback_menu_test.cc \
+  main/apps/recorder/recorder_file_list.cc \
+  main/apps/recorder/recorder_wav_file.cc \
+  -o /tmp/recorder_playback_menu_test && /tmp/recorder_playback_menu_test
 ```
 
 完整固件验证仍以 `idf.py build` 和真机烧录测试为准。

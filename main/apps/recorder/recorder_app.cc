@@ -3,10 +3,12 @@
 
 #include "config.h"
 #include "sdcard.h"
-#include "sdcard_log.h"
 #include "button.h"
 #include "app_mode.h"
 #include "codecs/box_audio_codec.h"
+#include "recorder_file_list.h"
+#include "recorder_noise_reducer.h"
+#include "recorder_wav_file.h"
 
 #include <driver/i2c_master.h>
 #include <esp_log.h>
@@ -17,6 +19,9 @@
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <algorithm>
+#include <mutex>
+#include <string>
 #include <vector>
 #include <mbedtls/base64.h>
 
@@ -28,9 +33,6 @@ constexpr uint8_t kAxp2101Address = 0x34;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
 const char* kRecDir = "/sdcard/rec";
 constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
-// 录音软件放大倍数：ES7210 裸录的语音幅度偏低（约满量程 0.5%），
-// 乘一个系数放大后写盘，回放才听得清。只作用于录音，不影响小智语音。
-constexpr int kRecordGain = 12;
 
 // 录音状态：仅最左键回调翻转本标志，文件读写全在录音任务单线程完成（无竞争）。
 volatile bool s_recording = false;
@@ -39,6 +41,10 @@ volatile bool s_exit = false;
 
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
 i2c_master_dev_handle_t s_pmic = nullptr;
+std::mutex s_ui_request_mutex;
+bool s_menu_requested = false;
+bool s_play_requested = false;
+std::string s_requested_play_path;
 
 esp_err_t WriteReg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val) {
     const uint8_t buf[2] = {reg, val};
@@ -158,6 +164,127 @@ void DumpWavOverSerial(const char* path) {
     fflush(stdout);
 }
 
+void OnOpenPlaybackMenu(void*) {
+    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
+    s_menu_requested = true;
+}
+
+void OnPlayFileRequested(const char* path, void*) {
+    if (path == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
+    s_requested_play_path = path;
+    s_play_requested = true;
+}
+
+bool TakeMenuRequest() {
+    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
+    if (!s_menu_requested) {
+        return false;
+    }
+    s_menu_requested = false;
+    return true;
+}
+
+bool TakePlayRequest(std::string* path) {
+    std::lock_guard<std::mutex> lock(s_ui_request_mutex);
+    if (!s_play_requested) {
+        return false;
+    }
+    s_play_requested = false;
+    if (path != nullptr) {
+        *path = s_requested_play_path;
+    }
+    return true;
+}
+
+const char* Basename(const char* path) {
+    if (path == nullptr) {
+        return "";
+    }
+    const char* slash = strrchr(path, '/');
+    return slash != nullptr ? slash + 1 : path;
+}
+
+void FlushDisplayThenPause(uint32_t ms = 90) {
+    RecorderDisplayResume();
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    RecorderDisplayPause();
+}
+
+void ShowPlaybackMenu() {
+    std::vector<RecorderDisplayMenuItem> menu_items;
+    auto entries = RecorderListRecordings(kRecDir, 32);
+    menu_items.reserve(entries.size());
+    for (const auto& entry : entries) {
+        RecorderDisplayMenuItem item;
+        item.label = entry.name;
+        item.detail = RecorderFormatRecordingDetail(entry);
+        item.path = entry.path;
+        menu_items.push_back(item);
+    }
+    RecorderDisplayShowFileMenu(menu_items);
+}
+
+bool PlayWavFile(BoxAudioCodec& codec, const char* path) {
+    FILE* playback = fopen(path, "rb");
+    if (playback == nullptr) {
+        ESP_LOGE(TAG, "无法打开播放文件 %s", path);
+        return false;
+    }
+
+    uint8_t header[44];
+    const size_t header_bytes = fread(header, 1, sizeof(header), playback);
+    RecorderWavInfo info = {};
+    if (header_bytes != sizeof(header) ||
+        !RecorderParseWavHeader(header, sizeof(header), &info) ||
+        !RecorderWavMatchesCodec(info, codec.output_sample_rate(), codec.output_channels())) {
+        ESP_LOGE(TAG, "不支持播放的 WAV: %s", path);
+        fclose(playback);
+        return false;
+    }
+
+    if (fseek(playback, info.data_offset, SEEK_SET) != 0) {
+        fclose(playback);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "播放 %s (%u bytes)", path, (unsigned)info.data_bytes);
+    RecorderShowText("PLAYING", Basename(path));
+    RecorderDisplayHideFileMenu();
+    RecorderDisplaySetPlayMenuVisible(false);
+    FlushDisplayThenPause();
+    codec.EnableOutput(true);
+
+    bool ok = true;
+    uint32_t remaining = info.data_bytes;
+    const size_t capacity_samples = kFrameSamples * info.channels;
+    std::vector<int16_t> playback_buf(capacity_samples);
+    while (remaining > 0 && !s_exit && !s_recording) {
+        playback_buf.resize(capacity_samples);
+        const size_t to_read = std::min(
+            static_cast<size_t>(remaining),
+            playback_buf.size() * sizeof(int16_t));
+        const size_t bytes = fread(playback_buf.data(), 1, to_read, playback);
+        if (bytes == 0) {
+            ok = false;
+            break;
+        }
+        remaining -= bytes;
+        playback_buf.resize(bytes / sizeof(int16_t));
+        codec.OutputData(playback_buf);
+    }
+
+    codec.EnableOutput(false);
+    fclose(playback);
+    if (s_recording || s_exit) {
+        ESP_LOGI(TAG, "播放中断: %s", path);
+        return false;
+    }
+    return ok && remaining == 0;
+}
+
 }  // namespace
 
 void RunRecorderApp() {
@@ -169,15 +296,18 @@ void RunRecorderApp() {
     }
 
     // 2. 先初始化屏幕（建 SPI2 总线，容忍已建）
-    esp_err_t disp_err = RecorderDisplayInit(s_pmic);
+    esp_err_t disp_err = RecorderDisplayInit(s_i2c_bus, s_pmic);
     if (disp_err != ESP_OK) {
         ESP_LOGW(TAG, "屏幕初始化失败: %s（录音仍可用，无显示）", esp_err_to_name(disp_err));
     }
+    RecorderDisplaySetCallbacks(OnOpenPlaybackMenu, OnPlayFileRequested, nullptr);
+    RecorderDisplayPause();
 
-    // 3. 再挂 SD 卡（复用屏已建的 SPI2 总线，own_spi_bus=false）+ 日志落盘
+    // 3. 再挂 SD 卡（复用屏已建的 SPI2 总线，own_spi_bus=false）
     bool sd_ok = SdCardMount(false);
     if (sd_ok) {
-        SdCardLogStart();
+        // Recorder 的屏幕和 SD 卡共用 SPI2，日志 hook 会在任意 ESP_LOG 中写卡，
+        // 容易与 LVGL 刷屏并发。录音模式优先保证录制/播放稳定，日志只走串口。
         mkdir(kRecDir, 0777);
     } else {
         ESP_LOGE(TAG, "SD 卡挂载失败，无法保存录音");
@@ -193,8 +323,11 @@ void RunRecorderApp() {
     const int channels = codec.input_channels();
     const int sample_rate = codec.input_sample_rate();
     ESP_LOGI(TAG, "codec ready: %d Hz, %d ch", sample_rate, channels);
+    RecorderNoiseReducer noise_reducer(sample_rate);
 
     RecorderShowText("REC 00:00", sd_ok ? "left key: start" : "NO SD CARD");
+    RecorderDisplaySetPlayMenuVisible(sd_ok);
+    RecorderDisplayResume();
 
     // 5. 最左键单击 = 开始/停止切换（仅翻标志）
     static Button left(KEY_LEFT_GPIO);
@@ -227,6 +360,7 @@ void RunRecorderApp() {
                 f = nullptr;
             }
             RecorderShowText("EXIT", "back to menu");
+            RecorderDisplayResume();
             ESP_LOGI(TAG, "退出录音模式 -> 选择器");
             vTaskDelay(pdMS_TO_TICKS(300));
             AppModeWriteAndReboot(AppMode::kSelector);  // 不返回
@@ -234,16 +368,20 @@ void RunRecorderApp() {
 
         if (s_recording && f == nullptr) {
             // 开始录音：新建文件 + 占位头
+            RecorderDisplayHideFileMenu();
+            RecorderDisplaySetPlayMenuVisible(false);
             if (!sd_ok || !SdCardIsMounted()) {
                 RecorderShowText("NO SD CARD", "cannot record");
                 s_recording = false;
+                RecorderDisplaySetPlayMenuVisible(sd_ok);
+                RecorderDisplayResume();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
             // 先刷屏，等 LVGL 刷完再动 SD 卡：屏与 SD 卡共用 SPI2 总线，
             // 时间上错开可避免刷屏与写卡抢总线导致的闪屏（短录音尤其明显）。
             RecorderShowText("REC 00:00", "recording");
-            vTaskDelay(pdMS_TO_TICKS(60));
+            FlushDisplayThenPause();
             int idx = NextRecIndex();
             snprintf(cur_path, sizeof(cur_path), "%s/rec%d.wav", kRecDir, idx);
             f = fopen(cur_path, "wb");
@@ -251,6 +389,8 @@ void RunRecorderApp() {
                 ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path);
                 RecorderShowText("SAVE FAILED", "write error");
                 s_recording = false;
+                RecorderDisplaySetPlayMenuVisible(sd_ok);
+                RecorderDisplayResume();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
@@ -263,13 +403,7 @@ void RunRecorderApp() {
         if (s_recording && f != nullptr) {
             // 读一帧 PCM 并写入
             if (codec.InputData(buf)) {
-                // 软件放大 + 削波保护：语音幅度偏低，放大后回放才清晰
-                for (auto& s : buf) {
-                    int v = (int)s * kRecordGain;
-                    if (v > 32767) v = 32767;
-                    else if (v < -32768) v = -32768;
-                    s = (int16_t)v;
-                }
+                noise_reducer.Process(buf);
                 size_t bytes = buf.size() * sizeof(int16_t);
                 fwrite(buf.data(), 1, bytes, f);
                 data_bytes += bytes;
@@ -282,6 +416,7 @@ void RunRecorderApp() {
                     char t[16];
                     snprintf(t, sizeof(t), "REC %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
                     RecorderShowText(t, "left key: stop");
+                    FlushDisplayThenPause(70);
                 }
             }
         }
@@ -296,8 +431,38 @@ void RunRecorderApp() {
             ESP_LOGI(TAG, "已保存 %s (%u 秒, %u 字节)", cur_path, (unsigned)secs, (unsigned)data_bytes);
             char saved[48];
             snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
-            RecorderShowText(saved, "saved to card");
+            RecorderShowText(saved, "sending");
+            RecorderDisplaySetPlayMenuVisible(false);
+            FlushDisplayThenPause();
             DumpWavOverSerial(cur_path);  // 串口回传，便于电脑端免拔卡分析
+            RecorderShowText(saved, "tap PLAY");
+            RecorderDisplaySetPlayMenuVisible(true);
+            RecorderDisplayResume();
+        }
+
+        if (!s_recording && f == nullptr && TakeMenuRequest()) {
+            RecorderDisplayPause();
+            ShowPlaybackMenu();
+            RecorderDisplayResume();
+        }
+
+        if (!s_recording && f == nullptr) {
+            std::string play_path;
+            if (TakePlayRequest(&play_path) && !play_path.empty()) {
+                RecorderDisplayPause();
+                const bool played = PlayWavFile(codec, play_path.c_str());
+                if (s_recording || s_exit) {
+                    RecorderDisplayResume();
+                } else if (played) {
+                    RecorderShowText("PLAY DONE", Basename(play_path.c_str()));
+                } else if (!s_recording && !s_exit) {
+                    RecorderShowText("PLAY FAILED", "check wav");
+                }
+                if (!s_recording && !s_exit && sd_ok) {
+                    RecorderDisplaySetPlayMenuVisible(true);
+                    RecorderDisplayResume();
+                }
+            }
         }
 
         if (!s_recording) {
