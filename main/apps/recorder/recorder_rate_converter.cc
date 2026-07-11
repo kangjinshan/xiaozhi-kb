@@ -73,12 +73,16 @@ bool RecorderRateConverter::ConvertDeviceBlock(const int16_t* input, size_t samp
         return false;
     }
 
-    uint32_t capacity = 0;
+    uint32_t required_capacity = 0;
     if (esp_ae_rate_cvt_get_max_out_sample_num(
-            handle_, static_cast<uint32_t>(samples), &capacity) != ESP_AE_ERR_OK ||
-        capacity == 0) {
+            handle_, static_cast<uint32_t>(samples), &required_capacity) != ESP_AE_ERR_OK ||
+        required_capacity == 0) {
         return false;
     }
+    // The rate converter can emit samples cached from an earlier block. Keep
+    // the largest recommended buffer instead of shrinking it for a short tail.
+    device_output_capacity_ = std::max(device_output_capacity_, required_capacity);
+    const uint32_t capacity = device_output_capacity_;
     std::vector<int16_t> converted(capacity);
     uint32_t actual = capacity;
     if (esp_ae_rate_cvt_process(

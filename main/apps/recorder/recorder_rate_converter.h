@@ -32,6 +32,7 @@ private:
 
 #if defined(ESP_PLATFORM)
     void* handle_ = nullptr;
+    uint32_t device_output_capacity_ = 0;
     bool ConvertDeviceBlock(const int16_t* input, size_t samples);
 #else
     uint64_t host_input_base_ = 0;
