@@ -60,6 +60,30 @@ bool IsFile(const std::string& path) {
     return stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
 }
 
+bool UnlinkIfPresent(const std::string& path) {
+    return unlink(path.c_str()) == 0 || errno == ENOENT;
+}
+
+bool PublishFile(const std::string& part_path,
+                 const std::string& destination_path) {
+    const std::string backup_path = destination_path + ".bak";
+    const bool had_destination = IsFile(destination_path);
+    if (had_destination) {
+        if (!UnlinkIfPresent(backup_path) ||
+            rename(destination_path.c_str(), backup_path.c_str()) != 0) {
+            return false;
+        }
+    }
+    if (rename(part_path.c_str(), destination_path.c_str()) != 0) {
+        if (had_destination && !IsFile(destination_path)) {
+            rename(backup_path.c_str(), destination_path.c_str());
+        }
+        return false;
+    }
+    UnlinkIfPresent(backup_path);
+    return true;
+}
+
 std::string ReadFile(const std::string& path) {
     FILE* file = fopen(path.c_str(), "rb");
     if (file == nullptr) {
@@ -363,7 +387,7 @@ bool AgentTurnStore::CommitReply(const std::string& transcript,
         received_reply_bytes_ == expected_reply_bytes_ &&
         actual_bytes == expected_reply_bytes_ &&
         actual_sha256 == expected_reply_sha256_;
-    if (!valid || rename(part_path.c_str(), paths.assistant_wav.c_str()) != 0) {
+    if (!valid || !PublishFile(part_path, paths.assistant_wav)) {
         unlink(part_path.c_str());
         active_paths_ = {};
         return false;
@@ -406,7 +430,10 @@ bool AgentTurnStore::LoadRecord(const AgentTurnPaths& paths, Record* record) con
     if (record == nullptr) {
         return false;
     }
-    const std::string json = ReadFile(paths.manifest);
+    std::string json = ReadFile(paths.manifest);
+    if (json.empty()) {
+        json = ReadFile(paths.manifest + ".bak");
+    }
     std::string status;
     if (json.empty() ||
         !ExtractString(json, "turn_id", &record->turn_id) ||
@@ -453,7 +480,7 @@ bool AgentTurnStore::WriteRecord(const AgentTurnPaths& paths,
     const std::string content = json.str();
     const bool ok = fwrite(content.data(), 1, content.size(), file) == content.size() &&
                     fflush(file) == 0 && fsync(fileno(file)) == 0 && fclose(file) == 0;
-    if (!ok || rename(part_path.c_str(), paths.manifest.c_str()) != 0) {
+    if (!ok || !PublishFile(part_path, paths.manifest)) {
         unlink(part_path.c_str());
         return false;
     }
