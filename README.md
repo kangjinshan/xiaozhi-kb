@@ -164,7 +164,7 @@
 - 在任意助手界面持续按住左上角 `MENU` 2 秒返回应用选择界面；短按不会退出，退出前会先收尾当前录音。
 - 主界面使用静态 LVGL 组件，不启动 UI 动画或定时器；展示内容统一由纯状态模型生成。
 - 固定中文界面从小智 `puhui-common.ttf` 生成 24 px / 4 bpp 子集；动态对话预览直接内存映射 assets 分区已有的 `font_puhui_common_30_4.bin`，不向应用镜像重复加入约 2.5 MB 字库。
-- 每个 turn 存在 `/sdcard/agent/YYYYMMDD/<turn-id>/`，包含 `user.wav`、完成后才出现的 `assistant.wav` 和原子更新的 `turn.json`；完成索引追加到 `/sdcard/agent/turns.jsonl`。
+- 每个 turn 存在 `/sdcard/agent/YYYYMMDD/<turn-id>/`，包含 `user.wav`、完成后才出现的 `assistant.wav` 和原子更新的 `turn.json`；完成索引追加到 `/sdcard/agent/turns.jsonl`。WSS 认证完成后由 Agent ready 帧提供当前时间和用户时区偏移，设备用单调时钟持续推进日期和固定宽度 turn ID；尚未联网校时时仍可录音到明确的 `/sdcard/agent/unsynced/`，不会伪装成 `19700101`。
 - `历史` 菜单把同一 turn 的 `AI 回复` / `你` 音频相邻显示；正式 `turn.json` 缺失、损坏或超过 16 KiB 时安全退回文件大小，并继续兼容原 `/sdcard/rec/recN.wav` 文件。
 - 新录音和 Agent 回复均为 WAV（单声道 / 16bit / 16000Hz）；播放器同时兼容旧 24000Hz 文件。单次录音接近 4 MiB 时自动停止并安全收尾。
 - 录音链路把 ES7210 的 24000Hz PCM 用小智同款 `esp_ae_rate_cvt` 转为 16000Hz，再按 10ms 帧调用 ESP-SR `ns_create` / `ns_process`，最后进行固定增益和限幅。

@@ -24,6 +24,8 @@ struct AgentVoiceControl {
     std::string turn_id;
     uint32_t protocol = 0;
     uint32_t heartbeat_seconds = 0;
+    uint64_t server_time_ms = 0;
+    int32_t timezone_offset_minutes = 0;
     uint32_t chunk_bytes = 0;
     bool replay = false;
     uint64_t bytes = 0;

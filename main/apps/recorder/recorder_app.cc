@@ -14,6 +14,7 @@
 #include "recorder_noise_reducer.h"
 #include "recorder_network.h"
 #include "recorder_rate_converter.h"
+#include "recorder_turn_clock.h"
 #include "recorder_wav_file.h"
 
 #include <driver/i2c_master.h>
@@ -24,7 +25,6 @@
 #include <freertos/task.h>
 
 #include <cstdio>
-#include <ctime>
 #include <cstring>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -156,37 +156,8 @@ bool FinishRecording(FILE* file,
     return std::fflush(file) == 0 && fsync(fileno(file)) == 0;
 }
 
-uint64_t RecorderNowMs() {
-    const time_t now = time(nullptr);
-    if (now >= 1577836800) {
-        return static_cast<uint64_t>(now) * 1000ULL;
-    }
-    return static_cast<uint64_t>(esp_timer_get_time() / 1000);
-}
-
 uint64_t RecorderMonotonicMs() {
     return static_cast<uint64_t>(esp_timer_get_time() / 1000);
-}
-
-std::string RecorderDate() {
-    const time_t now = time(nullptr);
-    if (now < 1577836800) {
-        return "19700101";
-    }
-    struct tm local = {};
-    localtime_r(&now, &local);
-    char date[9];
-    return strftime(date, sizeof(date), "%Y%m%d", &local) == 8
-        ? std::string(date)
-        : std::string("19700101");
-}
-
-std::string NewTurnId() {
-    char turn_id[48];
-    std::snprintf(turn_id, sizeof(turn_id), "turn-%llu-%08lx",
-                  static_cast<unsigned long long>(RecorderNowMs()),
-                  static_cast<unsigned long>(esp_random()));
-    return turn_id;
 }
 
 std::string DigestHex(const unsigned char digest[32]) {
@@ -568,6 +539,7 @@ void RunRecorderApp() {
 
     RecorderNetwork network;
     RecorderReconnectPolicy reconnect_policy;
+    RecorderTurnClock turn_clock;
     network.Start();
 
     // 5. 实体键只发布事件；状态 reducer 决定当前是否接受。
@@ -844,6 +816,15 @@ void RunRecorderApp() {
                 case AgentVoiceControlType::kReady: {
                     ESP_LOGI(TAG, "Agent voice WSS ready");
                     heartbeat_seconds = frame.heartbeat_seconds;
+                    if (frame.server_time_ms != 0) {
+                        turn_clock.Sync(
+                            frame.server_time_ms,
+                            frame.timezone_offset_minutes,
+                            RecorderMonotonicMs());
+                        ESP_LOGI(TAG, "Agent turn clock synced: UTC%+d min",
+                                 static_cast<int>(
+                                     frame.timezone_offset_minutes));
+                    }
                     reconnect_policy.Reset();
                     const AgentVoiceAction action = AgentVoiceReduce(
                         &voice_state, AgentVoiceEvent::kServerReady);
@@ -1103,8 +1084,11 @@ void RunRecorderApp() {
             // 时间上错开可避免刷屏与写卡抢总线导致的闪屏（短录音尤其明显）。
             RenderAssistant(&ui_context);
             FlushDisplayThenPause();
-            recording_created_at_ms = RecorderNowMs();
-            recording_paths = turn_store.Create(RecorderDate(), NewTurnId());
+            const RecorderTurnStamp turn_stamp = turn_clock.MakeStamp(
+                RecorderMonotonicMs(), esp_random());
+            recording_created_at_ms = turn_stamp.created_at_ms;
+            recording_paths = turn_store.Create(
+                turn_stamp.date, turn_stamp.turn_id);
             cur_path = recording_paths.user_wav;
             f = recording_paths.valid() ? fopen(cur_path.c_str(), "wb") : nullptr;
             if (f == nullptr) {

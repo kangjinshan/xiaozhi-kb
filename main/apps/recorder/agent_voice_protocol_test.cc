@@ -25,6 +25,35 @@ int main() {
     assert(control.type == AgentVoiceControlType::kReady);
     assert(control.protocol == 1);
     assert(control.heartbeat_seconds == 25);
+    assert(control.server_time_ms == 0);
+    assert(control.timezone_offset_minutes == 0);
+
+    assert(AgentVoiceParseControl(
+        R"({"type":"ready","protocol":1,"device_id":"device-one","heartbeat_seconds":25,"server_time_ms":1783857600123,"timezone_offset_minutes":480})",
+        "",
+        &control));
+    assert(control.server_time_ms == 1783857600123ULL);
+    assert(control.timezone_offset_minutes == 480);
+    assert(!AgentVoiceParseControl(
+        R"({"type":"ready","protocol":1,"heartbeat_seconds":25,"server_time_ms":1783857600123})",
+        "",
+        &control));
+    assert(!AgentVoiceParseControl(
+        R"({"type":"ready","protocol":1,"heartbeat_seconds":25,"server_time_ms":1577836799999,"timezone_offset_minutes":480})",
+        "",
+        &control));
+    assert(!AgentVoiceParseControl(
+        R"({"type":"ready","protocol":1,"heartbeat_seconds":25,"server_time_ms":4102444800001,"timezone_offset_minutes":480})",
+        "",
+        &control));
+    assert(!AgentVoiceParseControl(
+        R"({"type":"ready","protocol":1,"heartbeat_seconds":25,"server_time_ms":1783857600123,"timezone_offset_minutes":841})",
+        "",
+        &control));
+    assert(!AgentVoiceParseControl(
+        R"({"type":"ready","protocol":1,"heartbeat_seconds":25,"server_time_ms":1783857600123,"timezone_offset_minutes":-721})",
+        "",
+        &control));
 
     assert(AgentVoiceParseControl(
         R"({"type":"turn_ready","turn_id":"turn-1","chunk_bytes":4096})",

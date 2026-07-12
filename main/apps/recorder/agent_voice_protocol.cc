@@ -54,6 +54,26 @@ bool ExtractUint64(const std::string& json, const char* key, uint64_t* output) {
     return true;
 }
 
+bool ExtractInt64(const std::string& json, const char* key, int64_t* output) {
+    const std::string marker = std::string("\"") + key + "\":";
+    size_t position = json.find(marker);
+    if (position == std::string::npos) {
+        return false;
+    }
+    position += marker.size();
+    char* end = nullptr;
+    const long long value = strtoll(json.c_str() + position, &end, 10);
+    if (end == json.c_str() + position) {
+        return false;
+    }
+    *output = static_cast<int64_t>(value);
+    return true;
+}
+
+bool HasValue(const std::string& json, const char* key) {
+    return json.find(std::string("\"") + key + "\":") != std::string::npos;
+}
+
 bool ExtractBool(const std::string& json, const char* key, bool* output) {
     const std::string marker = std::string("\"") + key + "\":";
     size_t position = json.find(marker);
@@ -181,14 +201,32 @@ bool AgentVoiceParseControl(const std::string& json,
     if (type == "ready") {
         uint64_t protocol = 0;
         uint64_t heartbeat = 0;
+        uint64_t server_time_ms = 0;
+        int64_t timezone_offset_minutes = 0;
         if (!ExtractUint64(json, "protocol", &protocol) || protocol != 1 ||
             !ExtractUint64(json, "heartbeat_seconds", &heartbeat) ||
             heartbeat < 5 || heartbeat > 120) {
             return false;
         }
+        const bool has_server_time = HasValue(json, "server_time_ms");
+        const bool has_timezone = HasValue(json, "timezone_offset_minutes");
+        if (has_server_time != has_timezone ||
+            (has_server_time &&
+             (!ExtractUint64(json, "server_time_ms", &server_time_ms) ||
+              server_time_ms < 1577836800000ULL ||
+              server_time_ms > 4102444800000ULL ||
+              !ExtractInt64(json, "timezone_offset_minutes",
+                            &timezone_offset_minutes) ||
+              timezone_offset_minutes < -720 ||
+              timezone_offset_minutes > 840))) {
+            return false;
+        }
         parsed.type = AgentVoiceControlType::kReady;
         parsed.protocol = static_cast<uint32_t>(protocol);
         parsed.heartbeat_seconds = static_cast<uint32_t>(heartbeat);
+        parsed.server_time_ms = server_time_ms;
+        parsed.timezone_offset_minutes =
+            static_cast<int32_t>(timezone_offset_minutes);
     } else if (type == "turn_ready") {
         uint64_t chunk_bytes = 0;
         if (!ParseTurnId(json, expected_turn_id, &parsed.turn_id) ||

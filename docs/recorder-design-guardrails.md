@@ -89,6 +89,7 @@ Agent voice additions keep the same SPI2 ownership rule:
 - `assistant.wav.part` is never listed or played. Startup pending scans remove stale parts and request an idempotent replay.
 - Recorder input reserves DSP flush capacity below the 4 MiB protocol maximum and auto-stops at the limit.
 - Processor errors are not all equivalent. A control frame with `retryable=true` keeps the existing reconnect/replay path. A frame with `retryable=false` is terminal for the active turn: abort any partial reply, atomically persist `failed` plus the stable error code, clear the queued reducer state, and continue with the next pending turn or online idle. `ListPending()` must exclude `failed`, while its `user.wav` remains on SD for history and diagnosis.
+- The protocol-v1 authenticated ready frame may carry `server_time_ms` and `timezone_offset_minutes`. `RecorderTurnClock` combines that baseline with elapsed monotonic time for `YYYYMMDD`, created time and fixed-width hexadecimal IDs. Legacy ready frames remain valid; an offline first recording uses `unsynced`. Do not use `%llu` in IDs or represent an unavailable wall clock as `19700101`.
 
 The user-facing recorder presentation is a voice assistant, not a recording utility:
 
@@ -116,6 +117,12 @@ ESP-IDF FATFS does not provide POSIX replacement semantics for `rename()`:
 Before calling recorder work complete, run:
 
 ```bash
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_turn_clock_test.cc \
+  main/apps/recorder/recorder_turn_clock.cc \
+  -o /tmp/recorder_turn_clock_test && /tmp/recorder_turn_clock_test
+
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
   main/apps/recorder/recorder_control_state_test.cc \
