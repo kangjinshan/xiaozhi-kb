@@ -19,6 +19,7 @@ enum class RecorderControlEvent {
     kTouchPauseResume,
     kPhysicalLeft,
     kPhysicalRight,
+    kPhysicalPower,
     kPlaybackSelected,
     kPlaybackFinished,
     kAgentReplyReady,
@@ -33,6 +34,7 @@ enum class RecorderControlAction {
     kPausePlayback,
     kResumePlayback,
     kVolumeChanged,
+    kScreenPowerChanged,
     kStartPlayback,
     kStartAgentReplyPlayback,
     kExit,
@@ -43,6 +45,7 @@ struct RecorderControlState {
     int volume = 70;
     AgentVoicePhase voice_phase = AgentVoicePhase::kOffline;
     bool voice_turn_pending = false;
+    bool screen_on = true;
 };
 
 RecorderControlAction RecorderControlReduce(RecorderControlState* state,

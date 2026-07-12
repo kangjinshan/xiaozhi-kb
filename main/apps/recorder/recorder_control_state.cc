@@ -30,6 +30,10 @@ RecorderControlAction RecorderControlReduce(RecorderControlState* state,
     if (state == nullptr) {
         return RecorderControlAction::kNone;
     }
+    if (event == RecorderControlEvent::kPhysicalPower) {
+        state->screen_on = !state->screen_on;
+        return RecorderControlAction::kScreenPowerChanged;
+    }
     if (event == RecorderControlEvent::kExitRequested) {
         return RecorderControlAction::kExit;
     }

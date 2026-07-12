@@ -107,6 +107,29 @@ void TestIdleIgnoresPhysicalKeys() {
     Check(state.volume == 70, "idle keys keep volume");
 }
 
+void TestPowerKeyTogglesScreenWithoutChangingAssistantMode() {
+    for (RecorderControlMode mode : {
+             RecorderControlMode::kIdle,
+             RecorderControlMode::kRecording,
+             RecorderControlMode::kPlaying,
+             RecorderControlMode::kPaused,
+         }) {
+        RecorderControlState state{mode, 70};
+        state.voice_phase = AgentVoicePhase::kThinking;
+        Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalPower) ==
+                  RecorderControlAction::kScreenPowerChanged,
+              "PWR turns the screen off in every mode");
+        Check(!state.screen_on && state.mode == mode && state.volume == 70 &&
+                  state.voice_phase == AgentVoicePhase::kThinking,
+              "screen off preserves assistant state");
+        Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalPower) ==
+                  RecorderControlAction::kScreenPowerChanged,
+              "second PWR press turns the screen on");
+        Check(state.screen_on && state.mode == mode,
+              "screen on restores only display state");
+    }
+}
+
 void TestPauseResumeAndVolumeBounds() {
     RecorderControlState state{RecorderControlMode::kPlaying, 95};
     Check(RecorderControlReduce(&state, RecorderControlEvent::kTouchPauseResume) ==
@@ -163,6 +186,7 @@ int main() {
     TestIdlePlayOpensMenuAndSelectionStartsPlayback();
     TestRecordingIgnoresPhysicalKeys();
     TestIdleIgnoresPhysicalKeys();
+    TestPowerKeyTogglesScreenWithoutChangingAssistantMode();
     TestPauseResumeAndVolumeBounds();
     TestMenuExitIsAvailableInEveryState();
     TestMenuHoldTiming();
