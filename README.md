@@ -159,12 +159,12 @@
 - 空闲时主按钮显示 `点击说话`，点按后进入 `正在聆听`；说完点 `发送` 保存并提交。录音期间实体键禁用。断网时仍可录音并显示 `已排队`，但一个 turn 完成前不接受第二次录音。
 - 发送后界面依次显示 `正在发送`、`正在思考`、`准备回复` 和 `正在播报`；忙碌阶段主按钮禁用，避免重复提交。
 - 回复完整落卡后自动播放。播放时同一主按钮切换为 `暂停` / `继续`，左键音量 +10，右键音量 -10（范围 0–100）。
-- 点 `历史` 查看对话音频；同一 turn 显示为 `你` 和 `AI 回复`，旧 `/sdcard/rec/recN.wav` 显示为 `录音`。
+- 点 `历史` 查看对话；同一 turn 显示为 `你` 和 `AI 回复`，并从已发布的 `turn.json` 展示语音转写和回答预览，点行仍会播放对应音频。旧 `/sdcard/rec/recN.wav` 显示为 `录音`。
 - 在任意助手界面持续按住左上角 `MENU` 2 秒返回应用选择界面；短按不会退出，退出前会先收尾当前录音。
 - 主界面使用静态 LVGL 组件，不启动 UI 动画或定时器；展示内容统一由纯状态模型生成。
-- 中文界面复用小智 `puhui-common.ttf`，只将当前固定文案生成 24 px / 4 bpp 子集，避免把完整常用汉字库全部链接进固件。
+- 固定中文界面从小智 `puhui-common.ttf` 生成 24 px / 4 bpp 子集；动态对话预览直接内存映射 assets 分区已有的 `font_puhui_common_30_4.bin`，不向应用镜像重复加入约 2.5 MB 字库。
 - 每个 turn 存在 `/sdcard/agent/YYYYMMDD/<turn-id>/`，包含 `user.wav`、完成后才出现的 `assistant.wav` 和原子更新的 `turn.json`；完成索引追加到 `/sdcard/agent/turns.jsonl`。
-- `历史` 菜单把同一 turn 的 `AI 回复` / `你` 音频相邻显示，并继续兼容原 `/sdcard/rec/recN.wav` 文件。
+- `历史` 菜单把同一 turn 的 `AI 回复` / `你` 音频相邻显示；正式 `turn.json` 缺失、损坏或超过 16 KiB 时安全退回文件大小，并继续兼容原 `/sdcard/rec/recN.wav` 文件。
 - 新录音和 Agent 回复均为 WAV（单声道 / 16bit / 16000Hz）；播放器同时兼容旧 24000Hz 文件。单次录音接近 4 MiB 时自动停止并安全收尾。
 - 录音链路把 ES7210 的 24000Hz PCM 用小智同款 `esp_ae_rate_cvt` 转为 16000Hz，再按 10ms 帧调用 ESP-SR `ns_create` / `ns_process`，最后进行固定增益和限幅。
 - Recorder 复用小智保存的 Wi-Fi，保持 TLS WebSocket 在线；上传和下载均限制为 4096 字节块。回复每块写入 SD 后才确认累计字节数，服务端收到确认后再发下一块。
@@ -355,8 +355,15 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
   main/apps/recorder/recorder_playback_menu_test.cc \
   main/apps/recorder/recorder_file_list.cc \
+  main/apps/recorder/agent_turn_manifest.cc \
   main/apps/recorder/recorder_wav_file.cc \
   -o /tmp/recorder_playback_menu_test && /tmp/recorder_playback_menu_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_common_font_test.cc \
+  main/apps/recorder/recorder_common_font.cc \
+  -o /tmp/recorder_common_font_test && /tmp/recorder_common_font_test
 ```
 
 完整固件验证仍以 `idf.py build` 和真机烧录测试为准。

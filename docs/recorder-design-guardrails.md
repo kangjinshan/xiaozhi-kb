@@ -96,7 +96,8 @@ The user-facing recorder presentation is a voice assistant, not a recording util
 - `RecorderBuildAssistantUi()` is the only presentation-state mapper. Display callbacks publish existing reducer events and never access SD, network, or codec objects.
 - The UI uses a fixed LVGL object tree without animations or UI timers. Runtime changes only update text, colors, visibility, and disabled state.
 - Chinese fixed copy uses `font_puhui_assistant_24_4`, generated as a bounded subset from XiaoZhi's `puhui-common.ttf`. Regenerate the subset whenever fixed Chinese copy changes.
-- History labels are semantic: `你`, `AI 回复`, and legacy `录音`; `.part` and `.bak` files remain hidden.
+- Dynamic history detail reuses the mmap `font_puhui_common_30_4.bin` already shipped in the assets partition; a missing partition, asset, or decoded font is a non-fatal display fallback and must not duplicate the font in the app image.
+- History labels are semantic: `你`, `AI 回复`, and legacy `录音`; completed rows read transcript/reply previews only from a published `turn.json` capped at 16 KiB. `.part` and `.bak` files remain hidden.
 
 ESP-IDF FATFS does not provide POSIX replacement semantics for `rename()`:
 
@@ -149,8 +150,15 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
   main/apps/recorder/recorder_playback_menu_test.cc \
   main/apps/recorder/recorder_file_list.cc \
+  main/apps/recorder/agent_turn_manifest.cc \
   main/apps/recorder/recorder_wav_file.cc \
   -o /tmp/recorder_playback_menu_test && /tmp/recorder_playback_menu_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_common_font_test.cc \
+  main/apps/recorder/recorder_common_font.cc \
+  -o /tmp/recorder_common_font_test && /tmp/recorder_common_font_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
@@ -201,7 +209,7 @@ Real-device acceptance checks:
 - SD card mounts and self-test passes.
 - `点击说话` enters `正在聆听`; `发送` saves a 16 kHz mono PCM16 WAV whose environment-only regions are audibly quieter without clipped or missing speech. Physical keys do nothing while recording.
 - During a connected turn, the screen progresses through `正在发送`, `正在思考`, `准备回复`, and `正在播报`; the primary button is disabled while busy.
-- `历史` opens the conversation list and shows `你`, `AI 回复`, and legacy `录音` labels.
+- `历史` opens the conversation list, shows `你`, `AI 回复`, and legacy `录音` labels, and renders persisted ordinary-Chinese transcript/reply previews without changing the selected WAV playback target.
 - Both a legacy 24 kHz WAV and a new 16 kHz WAV play without rebooting.
 - `暂停` stops audible output, `继续` continues from the same position, and
   the screen stays responsive throughout.

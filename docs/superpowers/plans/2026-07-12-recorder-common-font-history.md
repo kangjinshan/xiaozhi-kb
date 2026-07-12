@@ -208,19 +208,19 @@ git commit -m "feat(recorder): reuse Xiaozhi common Chinese font"
 - Modify: `docs/recorder-design-guardrails.md`
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Document the new invariant**
+- [x] **Step 1: Document the new invariant**
 
 State that dynamic history text is read only from published, bounded
 `turn.json`, uses the mmap common font, and falls back non-fatally. Add the common
 font host-test command to the required gate and update the playback-menu command
 to compile `agent_turn_manifest.cc`.
 
-- [ ] **Step 2: Run all recorder host tests**
+- [x] **Step 2: Run all recorder host tests**
 
 Run every command in `docs/recorder-design-guardrails.md`, including the new
 common-font test. Expected: all tests exit 0.
 
-- [ ] **Step 3: Run the complete firmware build and size checks**
+- [x] **Step 3: Run the complete firmware build and size checks**
 
 ```bash
 source ~/esp/esp-idf/export.sh
@@ -234,6 +234,9 @@ and the expected noise-suppression symbol remains linked.
 
 - [ ] **Step 4: Flash and run safe serial verification**
 
+Flash and startup verification passed. Physical history-row rendering and WAV
+selection remain for final device acceptance.
+
 ```bash
 idf.py -p /dev/cu.usbmodem1101 flash
 /tmp/ser-venv/bin/python scripts/verify_agent_voice_runtime.py \
@@ -244,7 +247,7 @@ Use `dtr=True, rts=False`. Verify successful assets font loading, SD mount, WSS
 ready, no SPI assertion/reboot/stack fault, and a history row showing persisted
 Chinese conversation text while still playing the correct WAV.
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add README.md docs/recorder-design-guardrails.md AGENTS.md
