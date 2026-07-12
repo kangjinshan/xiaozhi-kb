@@ -43,7 +43,7 @@ WriteBytes(newer + "/turn.json",
 auto entries = RecorderListAgentRecordings(root, 8);
 Check(entries[0].conversation_text == "明天晴朗，最高 29℃",
       "assistant row carries reply text");
-Check(entries[1].conversation_text == "上海明天天气怎么样",
+Check(entries[1].conversation_text == "上海明天 天气怎么样",
       "user row carries normalized transcript");
 Check(RecorderFormatRecordingDetail(entries[0]) == entries[0].conversation_text,
       "conversation text replaces byte-size detail");
