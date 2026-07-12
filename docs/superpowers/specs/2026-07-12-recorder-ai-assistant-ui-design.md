@@ -28,7 +28,7 @@ weakening the already verified storage and transfer behavior.
 
 ## Experience Principles
 
-- The screen says `JINSHAN AI`, not Recorder.
+- The screen says `金山 AI`, not Recorder.
 - One large primary control owns the current conversation action.
 - Human state words replace protocol words: `Ready`, `Listening`, `Thinking`,
   `Preparing reply`, and `Speaking`.
@@ -45,9 +45,9 @@ The 480×480 layout uses five stable regions:
 
 1. Top left: small `MENU` control. A two-second hold still returns to the app
    selector; a short tap remains harmless.
-2. Top center: `JINSHAN AI` identity label.
-3. Top right: compact connectivity pill (`ONLINE`, `OFFLINE`, `CONNECTING`, or
-   `RETRYING`) with a matching color dot.
+2. Top center: `金山 AI` identity label.
+3. Top right: compact connectivity pill (`已连接`, `无网络`, `连接中`, or
+   `重试中`) with a matching color dot.
 4. Center: a layered circular assistant orb, a large activity title, and one line
    of guidance. The orb color changes by state but does not animate continuously.
 5. Bottom: one wide primary button and a smaller `HISTORY` button.
@@ -62,43 +62,47 @@ Visual palette:
 - offline/error: amber `#F5B94C`;
 - primary text: `#F7FAFF`; secondary text: `#96A3B7`.
 
-The existing Puhui fonts remain in use. User-facing strings are concise English so
-the screen does not depend on adding a larger Chinese glyph asset in this change.
+The existing Xiaozhi `puhui-common.ttf` remains the font source. The board's
+compiled `font_puhui_basic_*` contains only a compact common-character set and does
+not cover all assistant copy; linking the full 7,415-glyph 20 px object would exceed
+the remaining application partition budget. Generate and commit one small 24 px
+Puhui subset containing only this interface's Chinese copy plus ASCII. This reuses
+Xiaozhi's visual language without loading the full font or changing the assets
+partition.
 
 ## Interaction Model
 
 ### Ready or Offline
 
-- Primary button: `TAP TO TALK`.
+- Primary button: `点击说话`.
 - First tap starts recording.
 - Offline mode still starts recording and explains `Saved locally - sends later`.
 - `HISTORY` opens stored user/assistant audio only when no turn is pending.
 
 ### Listening
 
-- Primary button becomes `SEND`.
-- Center title shows `Listening` and the elapsed `MM:SS` timer.
+- Primary button becomes `发送`.
+- Center title shows `正在聆听` and the elapsed `MM:SS` timer.
 - Second tap finishes and durably stores the user WAV, then queues or sends it.
 - Physical volume keys remain inactive, matching the existing recorder guardrail.
 
 ### Sending, Thinking, and Receiving
 
 - Primary button remains visible but disabled.
-- The center title progresses through `Sending`, `Thinking`, and
-  `Preparing reply`.
+- The center title progresses through `正在发送`, `正在思考`, and `准备回复`.
 - Guidance explains that the question is safely stored while processing.
 - A second recording cannot begin until the current turn finishes.
 
 ### Speaking and Paused
 
-- Automatic reply playback shows `Speaking`.
-- Primary button becomes `PAUSE`; after tapping it becomes `RESUME`.
+- Automatic reply playback shows `正在播报`.
+- Primary button becomes `暂停`; after tapping it becomes `继续`.
 - The volume value is shown as supporting status. Existing physical left/right
   volume controls and 0–100 clamping remain unchanged.
 
 ### Completion and Recovery
 
-- After playback, the screen returns to `Ready` and `TAP TO TALK`.
+- After playback, the screen returns to `准备好了` and `点击说话`.
 - A queued offline turn shows `Queued` with a disabled primary control until the
   turn is delivered and played.
 - Missing SD, missing Wi-Fi provisioning, missing Agent provisioning, DSP failure,
@@ -130,8 +134,8 @@ idempotency, ACK flow control, hashing, FATFS publication, or playback sequencin
 
 ## History Screen
 
-- Rename `Recordings` to `Conversation History` and `PLAY` to `HISTORY`.
-- Label paired entries `AI REPLY` and `YOU` instead of exposing turn IDs as the
+- Rename `Recordings` to `对话历史` and `PLAY` to `历史`.
+- Label paired entries `AI 回复` and `你` instead of exposing turn IDs as the
   primary text.
 - Keep the existing detail text and playback behavior.
 - Preserve legacy WAV compatibility.
@@ -158,13 +162,13 @@ the required gate.
 
 The full ESP-IDF build must pass for ESP32-C6. Real-device acceptance must verify:
 
-- boot shows `JINSHAN AI` without a reboot loop;
-- ready/offline screen has one obvious `TAP TO TALK` action;
-- tap → listening timer → `SEND` stores the user WAV;
+- boot shows `金山 AI` without a reboot loop;
+- ready/offline screen has one obvious `点击说话` action;
+- tap → listening timer → `发送` stores the user WAV;
 - sending/thinking/receiving states visibly disable new speech;
 - reply storage transitions to `Speaking` and automatic playback;
 - pause/resume and physical volume behavior still work;
-- history presents `YOU`/`AI REPLY` entries and plays both;
+- history presents `你`/`AI 回复` entries and plays both;
 - no SPI2 assertion, stack fault, Guru Meditation, hash failure, or event overflow;
 - the existing six serial Agent runtime milestones still pass.
 
@@ -175,4 +179,4 @@ The full ESP-IDF build must pass for ESP32-C6. Real-device acceptance must verif
 - Streaming transcript or response text.
 - Continuous waveform/orb animation.
 - Changing Azure, Agent, MCP, Opus/GPT routing, WSS protocol, or SD schema.
-- Adding new font assets or exposing device credentials in UI/logs.
+- Linking the full Puhui font or exposing device credentials in UI/logs.

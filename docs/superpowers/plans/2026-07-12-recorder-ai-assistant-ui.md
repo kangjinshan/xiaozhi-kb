@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the Recorder utility presentation with a stable single-action `JINSHAN AI` voice-assistant interface while preserving the existing Azure, SD, recording, and playback behavior.
+**Goal:** Replace the Recorder utility presentation with a stable single-action `金山 AI` voice-assistant interface while preserving the existing Azure, SD, recording, and playback behavior.
 
 **Architecture:** Add a pure, host-tested presentation model that derives labels, colors, controls, and visibility from the existing Recorder/Agent states. Rebuild the fixed LVGL widget tree around that model, then route the one primary button back into the existing reducer events; storage, network, protocol, codec, and durable turn code remain unchanged.
 
@@ -15,11 +15,12 @@
 - Create `main/apps/recorder/recorder_assistant_ui.h`: presentation input/output types, semantic primary actions, notices, and color constants.
 - Create `main/apps/recorder/recorder_assistant_ui.cc`: pure priority/mapping logic for Recorder mode, Agent phase, pending turns, errors, timer, and volume.
 - Create `main/apps/recorder/recorder_assistant_ui_test.cc`: exhaustive host assertions for ready, offline, listening, busy, speaking, paused, queued, setup, storage, and retry views.
+- Create `main/apps/recorder/font_puhui_assistant_24_4.c`: generated Puhui subset for the exact Chinese assistant copy and ASCII.
 - Modify `main/apps/recorder/recorder_display.h`: replace split text/button state APIs with one render-model API.
-- Modify `main/apps/recorder/recorder_display.cc`: build the `JINSHAN AI` header, status pill, layered orb, single primary button, secondary history button, and restyled history overlay.
+- Modify `main/apps/recorder/recorder_display.cc`: build the `金山 AI` header, status pill, layered orb, single primary button, secondary history button, and restyled history overlay.
 - Modify `main/apps/recorder/recorder_app.cc`: construct render inputs at existing state transitions and route the display model without changing I/O ordering.
 - Modify `main/apps/recorder/recorder_file_list.h/.cc`: provide semantic history row labels.
-- Modify `main/apps/recorder/recorder_playback_menu_test.cc`: prove `AI REPLY`, `YOU`, and legacy labels.
+- Modify `main/apps/recorder/recorder_playback_menu_test.cc`: prove `AI 回复`, `你`, and legacy labels.
 - Modify `main/CMakeLists.txt`: compile the presentation module into firmware.
 - Modify `docs/recorder-design-guardrails.md`, `README.md`, and `AGENTS.md`: document the assistant interaction and required regressions.
 
@@ -61,9 +62,9 @@ RecorderAssistantUiInput Base() {
 
 void TestReady() {
     const auto model = RecorderBuildAssistantUi(Base());
-    Check(model.connection_label == "ONLINE", "ready is online");
-    Check(model.title == "Ready", "ready title");
-    Check(model.primary_label == "TAP TO TALK", "ready action");
+    Check(model.connection_label == "已连接", "ready is online");
+    Check(model.title == "准备好了", "ready title");
+    Check(model.primary_label == "点击说话", "ready action");
     Check(model.primary_action == RecorderAssistantPrimaryAction::kTalk,
           "ready starts talk");
     Check(model.primary_enabled && model.history_visible,
@@ -75,9 +76,9 @@ void TestListening() {
     input.mode = RecorderControlMode::kRecording;
     input.elapsed_seconds = 65;
     const auto model = RecorderBuildAssistantUi(input);
-    Check(model.title == "Listening", "listening title");
+    Check(model.title == "正在聆听", "listening title");
     Check(model.metric == "01:05", "listening timer");
-    Check(model.primary_label == "SEND", "listening sends");
+    Check(model.primary_label == "发送", "listening sends");
     Check(model.primary_action == RecorderAssistantPrimaryAction::kSend,
           "listening stop action");
     Check(!model.history_visible, "history hidden while listening");
@@ -99,7 +100,7 @@ void TestBusyAndQueued() {
     auto queued = Base();
     queued.voice_phase = AgentVoicePhase::kOffline;
     queued.turn_pending = true;
-    Check(RecorderBuildAssistantUi(queued).title == "Queued",
+    Check(RecorderBuildAssistantUi(queued).title == "已排队",
           "offline pending turn is queued");
 }
 
@@ -108,29 +109,29 @@ void TestPlaybackAndFailures() {
     speaking.mode = RecorderControlMode::kPlaying;
     speaking.volume = 80;
     auto model = RecorderBuildAssistantUi(speaking);
-    Check(model.title == "Speaking" && model.metric == "VOL 80",
+    Check(model.title == "正在播报" && model.metric == "音量 80",
           "playing view");
     Check(model.primary_action == RecorderAssistantPrimaryAction::kPause,
           "playing pauses");
 
     speaking.mode = RecorderControlMode::kPaused;
     model = RecorderBuildAssistantUi(speaking);
-    Check(model.title == "Paused", "paused title");
+    Check(model.title == "已暂停", "paused title");
     Check(model.primary_action == RecorderAssistantPrimaryAction::kResume,
           "paused resumes");
 
     auto no_sd = Base();
     no_sd.sd_ready = false;
     model = RecorderBuildAssistantUi(no_sd);
-    Check(model.title == "Storage needed", "missing SD is explicit");
+    Check(model.title == "请插入存储卡", "missing SD is explicit");
     Check(!model.primary_enabled, "missing SD blocks talk");
 
     auto setup = Base();
     setup.notice = RecorderAssistantNotice::kWifiSetup;
-    Check(RecorderBuildAssistantUi(setup).title == "Wi-Fi setup",
+    Check(RecorderBuildAssistantUi(setup).title == "请设置网络",
           "Wi-Fi setup is explicit");
     setup.notice = RecorderAssistantNotice::kAgentSetup;
-    Check(RecorderBuildAssistantUi(setup).title == "Agent setup",
+    Check(RecorderBuildAssistantUi(setup).title == "请设置助手",
           "Agent setup is explicit");
 }
 }  // namespace
@@ -198,14 +199,23 @@ RecorderAssistantUiModel RecorderBuildAssistantUi(
 Implement priority in this exact order: missing SD, explicit notice, recording,
 playing/paused, pending/busy turn, then idle connectivity. Clamp volume to 0–100
 and format elapsed time as zero-padded `MM:SS`. Use the palette from the design
-spec and these exact activity titles: `Ready`, `Ready offline`, `Listening`,
-`Queued`, `Sending`, `Thinking`, `Preparing reply`, `Speaking`, `Paused`,
-`Retrying`, `Storage needed`, `Wi-Fi setup`, `Agent setup`, `Audio unavailable`,
-and `Could not save`.
+spec and these exact activity titles: `准备好了`, `离线可用`, `正在聆听`,
+`已排队`, `正在发送`, `正在思考`, `准备回复`, `正在播报`, `已暂停`,
+`正在重试`, `请插入存储卡`, `请设置网络`, `请设置助手`, `录音不可用`,
+and `保存失败`.
 
-- [ ] **Step 4: Add the source to firmware and verify GREEN**
+- [ ] **Step 4: Generate the bounded Chinese font subset**
 
-Append `apps/recorder/recorder_assistant_ui.cc` beside the other Recorder sources
+Use Xiaozhi's existing `managed_components/78__xiaozhi-fonts/ttf/puhui-common.ttf`
+with the 78/lv_font_conv tool to generate a 24 px, 4 bpp LVGL C font named
+`font_puhui_assistant_24_4`. Include ASCII `0x20-0x7e` and every Chinese character
+appearing in the presentation model, `金山 AI`, `对话历史`, `AI 回复`, and `你`.
+Commit the generated C source; do not edit or commit `managed_components`.
+
+- [ ] **Step 5: Add the sources to firmware and verify GREEN**
+
+Append `apps/recorder/recorder_assistant_ui.cc` and
+`apps/recorder/font_puhui_assistant_24_4.c` beside the other Recorder sources
 in `main/CMakeLists.txt`, then run the command from Step 2 followed by:
 
 ```bash
@@ -214,7 +224,7 @@ in `main/CMakeLists.txt`, then run the command from Step 2 followed by:
 
 Expected: `recorder_assistant_ui_test passed`.
 
-- [ ] **Step 5: Commit the model**
+- [ ] **Step 6: Commit the model and font subset**
 
 ```bash
 git add main/CMakeLists.txt main/apps/recorder/recorder_assistant_ui.*
@@ -247,17 +257,18 @@ Replace the old title/subtitle plus separate REC/PLAY/action buttons with fixed
 widgets for:
 
 ```text
-MENU          JINSHAN AI          [● ONLINE]
+MENU           金山 AI             [● 已连接]
 
                  ( orb )
-                 Ready
-             Ask me anything
+              准备好了
+               请说话
 
-              TAP TO TALK
-                 HISTORY
+               点击说话
+                 历史
 ```
 
-Use screen background `0x090D16`; create two non-clickable circular orb layers,
+Use `font_puhui_assistant_24_4` for Chinese labels. Use screen background
+`0x090D16`; create two non-clickable circular orb layers,
 an `AI` center label, status/title/subtitle/metric labels, one 320×66 primary
 button, and one 150×42 history button. Do not create LVGL animations or timers.
 Add pressed-state styling to active buttons and disabled opacity to the primary
@@ -290,7 +301,7 @@ the model says it is unavailable. It must not touch SD, network, or codec object
 
 - [ ] **Step 4: Restyle the history overlay**
 
-Rename its title to `Conversation History`, retain `BACK`, and use the assistant
+Rename its title to `对话历史`, retain `BACK`, and use the assistant
 palette. Keep the existing scrollable list and path storage so callback pointers
 remain stable.
 
@@ -300,7 +311,7 @@ Run:
 
 ```bash
 git diff --check
-rg -n 'JINSHAN AI|TAP TO TALK|Conversation History' \
+rg -n '金山 AI|点击说话|对话历史' \
   main/apps/recorder/recorder_display.cc
 ```
 
@@ -384,13 +395,13 @@ git commit -m "feat(recorder): present Agent turns as conversation"
 Add to the playback menu test:
 
 ```cpp
-Check(RecorderConversationLabel(entries[0]) == "AI REPLY",
+Check(RecorderConversationLabel(entries[0]) == "AI 回复",
       "assistant audio is an AI reply");
-Check(RecorderConversationLabel(entries[1]) == "YOU",
+Check(RecorderConversationLabel(entries[1]) == "你",
       "user audio is labeled as the user");
 RecorderFileEntry legacy;
 legacy.name = "rec7.wav";
-Check(RecorderConversationLabel(legacy) == "SAVED AUDIO",
+Check(RecorderConversationLabel(legacy) == "录音",
       "legacy audio has a neutral label");
 ```
 
@@ -415,9 +426,9 @@ Add:
 
 ```cpp
 std::string RecorderConversationLabel(const RecorderFileEntry& entry) {
-    if (!entry.turn_id.empty() && entry.name == "assistant.wav") return "AI REPLY";
-    if (!entry.turn_id.empty() && entry.name == "user.wav") return "YOU";
-    return "SAVED AUDIO";
+    if (!entry.turn_id.empty() && entry.name == "assistant.wav") return "AI 回复";
+    if (!entry.turn_id.empty() && entry.name == "user.wav") return "你";
+    return "录音";
 }
 ```
 
@@ -446,7 +457,7 @@ git commit -m "feat(recorder): label audio as conversation history"
 
 - [ ] **Step 1: Update durable documentation**
 
-Describe `JINSHAN AI`, the single `TAP TO TALK`/`SEND` control, state progression,
+Describe `金山 AI`, the single `点击说话`/`发送` control, state progression,
 disabled busy interaction, assistant history labels, static rendering, and the
 unchanged SPI2/SD safety boundary. Replace user instructions that describe separate
 `REC`, `STOP`, and `PLAY` buttons.
@@ -495,12 +506,12 @@ idf.py -p /dev/cu.usbmodem1101 flash
 ```
 
 Use safe serial listening (`dtr=True`, `rts=False`) and visual inspection. Confirm
-the `JINSHAN AI` identity, single-button states, history labels, and absence of SPI,
+the `金山 AI` identity, single-button states, history labels, and absence of SPI,
 stack, reset, hash, or queue failures.
 
 - [ ] **Step 6: Complete one physical voice turn**
 
-On the device, tap `TAP TO TALK`, speak a weather question, tap `SEND`, and observe
+On the device, tap `点击说话`, speak a weather question, tap `发送`, and observe
 the state sequence through `Speaking`. Run:
 
 ```bash
