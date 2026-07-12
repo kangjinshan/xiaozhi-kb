@@ -758,6 +758,7 @@ void RunRecorderApp() {
         while (network.Poll(&network_event)) {
             if (network_event.type == RecorderNetworkEventType::kWifiConnected) {
                 wifi_connected = true;
+                ESP_LOGI(TAG, "Agent voice Wi-Fi connected");
                 reconnect_policy.Reset();
                 reconnect_at_ms = 0;
                 AgentVoiceReduce(&voice_state, AgentVoiceEvent::kWifiConnected);
@@ -834,6 +835,7 @@ void RunRecorderApp() {
             }
             switch (frame.type) {
                 case AgentVoiceControlType::kReady: {
+                    ESP_LOGI(TAG, "Agent voice WSS ready");
                     heartbeat_seconds = frame.heartbeat_seconds;
                     reconnect_policy.Reset();
                     const AgentVoiceAction action = AgentVoiceReduce(
@@ -996,6 +998,7 @@ void RunRecorderApp() {
             playing_agent_reply = true;
             AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackStarted);
             sync_voice_control();
+            ESP_LOGI(TAG, "Agent reply playback start: %s", play_path.c_str());
         }
         if (!play_path.empty() &&
             control.mode == RecorderControlMode::kPlaying && f == nullptr) {
@@ -1159,6 +1162,7 @@ void RunRecorderApp() {
                      cur_path.c_str(),
                      static_cast<unsigned>(secs),
                      static_cast<unsigned long long>(wav_bytes));
+            ESP_LOGI(TAG, "Agent user WAV stored: %s", cur_path.c_str());
             char saved[48];
             snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
             load_oldest_pending();

@@ -20,6 +20,8 @@
 | `verify_ble_keyboard_after_cold_boot.py` | 冷启动后监听键盘日志并扫描 `XiaoZhi KB` | 可选依赖 `bleak`；不主动复位 |
 | `verify_selector_stability.py` | 检测选择器 SPI2 断言与重启循环 | 查找 `spi_hal_setup_trans` 和重复 selector 启动 |
 | `verify_xiaozhi_stability.py` | 检测小智 Wi-Fi 启动栈故障 | 查找 `Stack protection fault`、重复启动和 `SdCardLogVprintf` |
+| `verify_agent_voice_runtime.py` | 验收 Agent 完整语音回路 | 安全监听至少 30 秒，要求联网、WSS、双 WAV 落卡和自动播放里程碑；SPI2/栈/哈希/重启故障硬失败 |
+| `test_verify_agent_voice_runtime.py` | 串口判定规则单元测试 | 纯日志样本，不连接真机、不读取秘密 |
 
 子目录 `Image_Converter/`、`ogg_converter/`、`p3_tools/`、`spiffs_assets/` 和 `acoustic_check/` 各自提供资源转换或声学工具；优先阅读其中 README。
 
@@ -36,6 +38,7 @@
 ```bash
 /tmp/ser-venv/bin/python scripts/verify_selector_stability.py --duration 6
 /tmp/ser-venv/bin/python scripts/verify_xiaozhi_stability.py --duration 15
+/tmp/ser-venv/bin/python scripts/verify_agent_voice_runtime.py --duration 30
 /tmp/ser-venv/bin/python scripts/verify_ble_keyboard_after_cold_boot.py
 ```
 

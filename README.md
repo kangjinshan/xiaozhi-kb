@@ -173,6 +173,7 @@ Agent WSS 地址由 `CONFIG_AGENT_VOICE_URL` 配置，设备 bearer token 只写
 
 - `main/apps/recorder/recorder_app.cc`
 - `main/apps/recorder/recorder_display.cc`
+- `scripts/verify_agent_voice_runtime.py`（至少监听 30 秒，不主动复位设备）
 - `docs/recorder-design-guardrails.md`（录音新功能设计前必读，记录 SPI2 / ESP-SR 真机坑）
 
 ### 6. SD 卡挂载与日志策略
