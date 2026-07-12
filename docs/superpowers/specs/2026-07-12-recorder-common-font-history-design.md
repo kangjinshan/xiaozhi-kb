@@ -1,6 +1,6 @@
 # Recorder Common-Font Conversation History Design
 
-**Date:** 2026-07-12  
+**Date:** 2026-07-12
 **Target:** Waveshare ESP32-C6-Touch-AMOLED-2.16 Jinshan AI mode
 
 ## Goal

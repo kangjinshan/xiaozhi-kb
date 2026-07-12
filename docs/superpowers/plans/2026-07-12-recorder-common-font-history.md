@@ -38,7 +38,7 @@ Extend `TestAgentTurnAudioStaysAdjacentNewestFirst()` to write a published
 
 ```cpp
 WriteBytes(newer + "/turn.json",
-    "{\"transcript\":\"上海明天\\n天气怎么样\"," 
+    "{\"transcript\":\"上海明天\\n天气怎么样\","
     "\"reply_text\":\"明天晴朗，最高 29℃\"}");
 auto entries = RecorderListAgentRecordings(root, 8);
 Check(entries[0].conversation_text == "明天晴朗，最高 29℃",
