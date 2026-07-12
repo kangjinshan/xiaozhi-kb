@@ -134,6 +134,10 @@ void TestStorageSetupAndTransientFailuresTakePriority() {
     input.notice = RecorderAssistantNotice::kSaveFailure;
     model = RecorderBuildAssistantUi(input);
     Check(model.title == "保存失败", "save failure title");
+
+    input.notice = RecorderAssistantNotice::kPlaybackFailure;
+    model = RecorderBuildAssistantUi(input);
+    Check(model.title == "播放失败", "playback failure title");
 }
 
 void TestConnectingAndRetryingRemainUnderstandable() {
@@ -153,6 +157,35 @@ void TestConnectingAndRetryingRemainUnderstandable() {
           "recording remains available while retrying");
 }
 
+bool Fits(const RecorderAssistantRect& rect, int width, int height) {
+    return rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0 &&
+           rect.x + rect.width <= width && rect.y + rect.height <= height;
+}
+
+void TestAssistantLayoutFitsTargetDisplay() {
+    constexpr int kWidth = 480;
+    constexpr int kHeight = 480;
+    const auto layout = RecorderBuildAssistantLayout(kWidth, kHeight);
+    for (const auto& rect : {
+             layout.menu,
+             layout.brand,
+             layout.connection,
+             layout.orb,
+             layout.title,
+             layout.subtitle,
+             layout.metric,
+             layout.primary,
+             layout.history,
+         }) {
+        Check(Fits(rect, kWidth, kHeight), "assistant widget fits display");
+    }
+    Check(layout.orb.width == layout.orb.height, "assistant orb is circular");
+    Check(layout.primary.width >= 320 && layout.primary.height >= 60,
+          "primary talk target is prominent");
+    Check(layout.history.y > layout.primary.y + layout.primary.height,
+          "history stays secondary below primary");
+}
+
 }  // namespace
 
 int main() {
@@ -162,6 +195,7 @@ int main() {
     TestSpeakingPauseResumeAndVolumeClamp();
     TestStorageSetupAndTransientFailuresTakePriority();
     TestConnectingAndRetryingRemainUnderstandable();
+    TestAssistantLayoutFitsTargetDisplay();
     std::puts("recorder_assistant_ui_test passed");
     return 0;
 }

@@ -20,5 +20,6 @@ std::vector<RecorderFileEntry> RecorderListRecordings(const char* dir, size_t ma
 std::vector<RecorderFileEntry> RecorderListAgentRecordings(const char* root,
                                                            size_t max_entries);
 std::string RecorderFormatRecordingDetail(const RecorderFileEntry& entry);
+std::string RecorderConversationLabel(const RecorderFileEntry& entry);
 
 #endif  // RECORDER_FILE_LIST_H_

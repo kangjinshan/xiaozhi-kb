@@ -162,3 +162,13 @@ std::string RecorderFormatRecordingDetail(const RecorderFileEntry& entry) {
     }
     return detail;
 }
+
+std::string RecorderConversationLabel(const RecorderFileEntry& entry) {
+    if (!entry.turn_id.empty() && entry.name == "assistant.wav") {
+        return "AI 回复";
+    }
+    if (!entry.turn_id.empty() && entry.name == "user.wav") {
+        return "你";
+    }
+    return "录音";
+}

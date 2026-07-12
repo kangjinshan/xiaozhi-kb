@@ -20,6 +20,7 @@ enum class RecorderAssistantNotice {
     kAgentSetup,
     kDspFailure,
     kSaveFailure,
+    kPlaybackFailure,
 };
 
 struct RecorderAssistantUiInput {
@@ -47,7 +48,27 @@ struct RecorderAssistantUiModel {
     bool history_visible = false;
 };
 
+struct RecorderAssistantRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+struct RecorderAssistantLayout {
+    RecorderAssistantRect menu;
+    RecorderAssistantRect brand;
+    RecorderAssistantRect connection;
+    RecorderAssistantRect orb;
+    RecorderAssistantRect title;
+    RecorderAssistantRect subtitle;
+    RecorderAssistantRect metric;
+    RecorderAssistantRect primary;
+    RecorderAssistantRect history;
+};
+
 RecorderAssistantUiModel RecorderBuildAssistantUi(
     const RecorderAssistantUiInput& input);
+RecorderAssistantLayout RecorderBuildAssistantLayout(int width, int height);
 
 #endif  // RECORDER_ASSISTANT_UI_H_

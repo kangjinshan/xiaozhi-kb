@@ -285,51 +285,59 @@ void OnPlayFileRequested(const char* path, void*) {
     }
 }
 
-const char* Basename(const char* path) {
-    if (path == nullptr) {
-        return "";
-    }
-    const char* slash = strrchr(path, '/');
-    return slash != nullptr ? slash + 1 : path;
-}
+struct RecorderAssistantRenderContext {
+    RecorderControlState* control = nullptr;
+    AgentVoiceState* voice_state = nullptr;
+    RecorderAssistantNotice* notice = nullptr;
+    uint32_t* elapsed_seconds = nullptr;
+    bool sd_ready = false;
+    bool noise_reduction_ready = false;
+};
 
-RecorderDisplayState ToDisplayState(RecorderControlMode mode) {
-    switch (mode) {
-        case RecorderControlMode::kIdle:
-            return RecorderDisplayState::kIdle;
-        case RecorderControlMode::kRecording:
-            return RecorderDisplayState::kRecording;
-        case RecorderControlMode::kPlaying:
-            return RecorderDisplayState::kPlaying;
-        case RecorderControlMode::kPaused:
-            return RecorderDisplayState::kPaused;
+void RenderAssistant(const RecorderAssistantRenderContext* context) {
+    if (context == nullptr || context->control == nullptr ||
+        context->voice_state == nullptr || context->notice == nullptr ||
+        context->elapsed_seconds == nullptr) {
+        return;
     }
-    return RecorderDisplayState::kIdle;
+    RecorderAssistantUiInput input;
+    input.mode = context->control->mode;
+    input.voice_phase = context->voice_state->phase;
+    input.turn_pending = context->voice_state->queued_turn;
+    input.sd_ready = context->sd_ready;
+    input.noise_reduction_ready = context->noise_reduction_ready;
+    input.notice = *context->notice;
+    input.elapsed_seconds = *context->elapsed_seconds;
+    input.volume = context->control->volume;
+    RecorderDisplayRenderAssistant(RecorderBuildAssistantUi(input));
 }
 
 RecorderControlAction ApplyRequest(const RecorderRequest& request,
                                    RecorderControlState* control,
                                    BoxAudioCodec* codec,
-                                   bool* exit_requested) {
+                                   bool* exit_requested,
+                                   RecorderAssistantRenderContext* ui_context) {
     RecorderControlAction action = RecorderControlReduce(control, request.event);
     if (action == RecorderControlAction::kVolumeChanged && codec != nullptr) {
         codec->SetOutputVolume(control->volume);
-        RecorderDisplaySetState(ToDisplayState(control->mode), control->volume);
-    } else if (action == RecorderControlAction::kPausePlayback ||
-               action == RecorderControlAction::kResumePlayback) {
-        RecorderDisplaySetState(ToDisplayState(control->mode), control->volume);
     } else if (action == RecorderControlAction::kExit && exit_requested != nullptr) {
         *exit_requested = true;
+    }
+    if (action == RecorderControlAction::kVolumeChanged ||
+        action == RecorderControlAction::kPausePlayback ||
+        action == RecorderControlAction::kResumePlayback) {
+        RenderAssistant(ui_context);
     }
     return action;
 }
 
 void DrainPlaybackRequests(RecorderControlState* control,
                            BoxAudioCodec* codec,
-                           bool* exit_requested) {
+                           bool* exit_requested,
+                           RecorderAssistantRenderContext* ui_context) {
     RecorderRequest request;
     while (TakeRequest(&request)) {
-        ApplyRequest(request, control, codec, exit_requested);
+        ApplyRequest(request, control, codec, exit_requested, ui_context);
     }
 }
 
@@ -350,12 +358,7 @@ void ShowPlaybackMenu() {
     menu_items.reserve(entries.size());
     for (const auto& entry : entries) {
         RecorderDisplayMenuItem item;
-        if (!entry.turn_id.empty()) {
-            item.label = entry.turn_id +
-                (entry.name == "assistant.wav" ? " / AI" : " / YOU");
-        } else {
-            item.label = entry.name;
-        }
+        item.label = RecorderConversationLabel(entry);
         item.detail = RecorderFormatRecordingDetail(entry);
         item.path = entry.path;
         menu_items.push_back(item);
@@ -374,7 +377,8 @@ enum class PlaybackResult {
 PlaybackResult PlayWavFile(BoxAudioCodec& codec,
                            const char* path,
                            RecorderControlState* control,
-                           bool* exit_requested) {
+                           bool* exit_requested,
+                           RecorderAssistantRenderContext* ui_context) {
     FILE* playback = fopen(path, "rb");
     if (playback == nullptr) {
         ESP_LOGE(TAG, "无法打开播放文件 %s", path);
@@ -407,9 +411,8 @@ PlaybackResult PlayWavFile(BoxAudioCodec& codec,
     }
 
     ESP_LOGI(TAG, "播放 %s (%u bytes)", path, (unsigned)info.data_bytes);
-    RecorderShowText("PLAYING", nullptr);
     RecorderDisplayHideFileMenu();
-    RecorderDisplaySetState(RecorderDisplayState::kPlaying, control->volume);
+    RenderAssistant(ui_context);
     RecorderDisplayResume();
     codec.EnableOutput(true);
 
@@ -418,7 +421,7 @@ PlaybackResult PlayWavFile(BoxAudioCodec& codec,
     const size_t capacity_samples = kPlaybackReadSamples * info.channels;
     std::vector<int16_t> playback_buf(capacity_samples);
     while (remaining > 0 && !*exit_requested) {
-        DrainPlaybackRequests(control, &codec, exit_requested);
+        DrainPlaybackRequests(control, &codec, exit_requested, ui_context);
         if (*exit_requested) {
             break;
         }
@@ -448,11 +451,11 @@ PlaybackResult PlayWavFile(BoxAudioCodec& codec,
         if (!converted.empty()) {
             codec.OutputData(converted);
         }
-        DrainPlaybackRequests(control, &codec, exit_requested);
+        DrainPlaybackRequests(control, &codec, exit_requested, ui_context);
     }
 
     while (control->mode == RecorderControlMode::kPaused && !*exit_requested) {
-        DrainPlaybackRequests(control, &codec, exit_requested);
+        DrainPlaybackRequests(control, &codec, exit_requested, ui_context);
         if (control->mode == RecorderControlMode::kPaused && !*exit_requested) {
             vTaskDelay(pdMS_TO_TICKS(20));
         }
@@ -532,12 +535,6 @@ void RunRecorderApp() {
              noise_reducer.output_sample_rate(),
              noise_reducer.noise_reduction_enabled() ? "enabled" : "unavailable");
 
-    const char* idle_subtitle = noise_reducer.noise_reduction_enabled()
-        ? "NS READY / tap REC"
-        : "NS OFF / tap REC";
-    if (!noise_reducer.valid()) {
-        idle_subtitle = "NS FAILED";
-    }
     AgentVoiceState voice_state;
     AgentPendingTurn active_turn;
     bool has_active_turn = false;
@@ -552,9 +549,20 @@ void RunRecorderApp() {
     RecorderControlState control{RecorderControlMode::kIdle, codec.output_volume()};
     control.voice_phase = voice_state.phase;
     control.voice_turn_pending = voice_state.queued_turn;
-    RecorderShowText(has_active_turn ? "QUEUED" : "OFFLINE",
-                     sd_ok ? idle_subtitle : "NO SD CARD");
-    RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+    uint32_t assistant_elapsed_seconds = 0;
+    RecorderAssistantNotice ui_notice = noise_reducer.valid()
+        ? RecorderAssistantNotice::kNone
+        : RecorderAssistantNotice::kDspFailure;
+    uint64_t ui_notice_until_ms = 0;
+    RecorderAssistantRenderContext ui_context = {
+        .control = &control,
+        .voice_state = &voice_state,
+        .notice = &ui_notice,
+        .elapsed_seconds = &assistant_elapsed_seconds,
+        .sd_ready = sd_ok,
+        .noise_reduction_ready = noise_reducer.noise_reduction_enabled(),
+    };
+    RenderAssistant(&ui_context);
     RecorderDisplayResume();
 
     RecorderNetwork network;
@@ -595,18 +603,6 @@ void RunRecorderApp() {
     auto sync_voice_control = [&]() {
         control.voice_phase = voice_state.phase;
         control.voice_turn_pending = voice_state.queued_turn;
-    };
-
-    auto show_voice_status = [&](const char* subtitle = nullptr) {
-        if (control.mode == RecorderControlMode::kIdle) {
-            const char* title = voice_state.queued_turn &&
-                    (voice_state.phase == AgentVoicePhase::kOffline ||
-                     voice_state.phase == AgentVoicePhase::kError)
-                ? "QUEUED"
-                : AgentVoicePhaseTitle(voice_state.phase);
-            RecorderShowText(title,
-                             subtitle != nullptr ? subtitle : idle_subtitle);
-        }
     };
 
     auto abort_reply = [&]() {
@@ -655,7 +651,7 @@ void RunRecorderApp() {
         if (!updated) {
             return false;
         }
-        show_voice_status("upload pending");
+        RenderAssistant(&ui_context);
         ESP_LOGI(TAG, "Agent turn queued for upload: %s",
                  active_turn.paths.turn_id.c_str());
         return true;
@@ -703,7 +699,7 @@ void RunRecorderApp() {
         RecorderRequest request;
         while (TakeRequest(&request)) {
             RecorderControlAction action =
-                ApplyRequest(request, &control, &codec, &exit_requested);
+                ApplyRequest(request, &control, &codec, &exit_requested, &ui_context);
             if (action == RecorderControlAction::kOpenPlaybackMenu &&
                 open_menu != nullptr) {
                 *open_menu = true;
@@ -723,9 +719,7 @@ void RunRecorderApp() {
         } else {
             reconnect_at_ms = 0;
         }
-        show_voice_status(event == AgentVoiceEvent::kFailure
-                              ? "retrying connection"
-                              : "waiting for network");
+        RenderAssistant(&ui_context);
     };
 
     auto fail_connection = [&](const char* reason) {
@@ -736,12 +730,17 @@ void RunRecorderApp() {
 
     while (true) {
         const uint64_t now_ms = RecorderMonotonicMs();
+        if (ui_notice_until_ms != 0 && now_ms >= ui_notice_until_ms) {
+            ui_notice = RecorderAssistantNotice::kNone;
+            ui_notice_until_ms = 0;
+            RenderAssistant(&ui_context);
+        }
         if (wifi_connected && reconnect_at_ms != 0 &&
             now_ms >= reconnect_at_ms) {
             reconnect_at_ms = 0;
             AgentVoiceReduce(&voice_state, AgentVoiceEvent::kWifiConnected);
             sync_voice_control();
-            show_voice_status("connecting");
+            RenderAssistant(&ui_context);
             if (!network.ConnectSocket()) {
                 schedule_reconnect(AgentVoiceEvent::kFailure);
             }
@@ -763,7 +762,10 @@ void RunRecorderApp() {
                 reconnect_at_ms = 0;
                 AgentVoiceReduce(&voice_state, AgentVoiceEvent::kWifiConnected);
                 sync_voice_control();
-                show_voice_status("connecting");
+                if (ui_notice == RecorderAssistantNotice::kWifiSetup) {
+                    ui_notice = RecorderAssistantNotice::kNone;
+                }
+                RenderAssistant(&ui_context);
                 if (!network.ConnectSocket()) {
                     schedule_reconnect(AgentVoiceEvent::kFailure);
                 }
@@ -784,11 +786,15 @@ void RunRecorderApp() {
                 continue;
             }
             if (network_event.type == RecorderNetworkEventType::kNeedsWifiProvisioning) {
-                RecorderShowText("WIFI SETUP", "configure in XiaoZhi mode");
+                ui_notice = RecorderAssistantNotice::kWifiSetup;
+                ui_notice_until_ms = 0;
+                RenderAssistant(&ui_context);
                 continue;
             }
             if (network_event.type == RecorderNetworkEventType::kNeedsAgentProvisioning) {
-                RecorderShowText("AGENT SETUP", "device token missing");
+                ui_notice = RecorderAssistantNotice::kAgentSetup;
+                ui_notice_until_ms = 0;
+                RenderAssistant(&ui_context);
                 continue;
             }
             if (network_event.type == RecorderNetworkEventType::kError) {
@@ -841,7 +847,10 @@ void RunRecorderApp() {
                     const AgentVoiceAction action = AgentVoiceReduce(
                         &voice_state, AgentVoiceEvent::kServerReady);
                     sync_voice_control();
-                    show_voice_status(has_active_turn ? "queued turn" : idle_subtitle);
+                    if (ui_notice == RecorderAssistantNotice::kAgentSetup) {
+                        ui_notice = RecorderAssistantNotice::kNone;
+                    }
+                    RenderAssistant(&ui_context);
                     if (action == AgentVoiceAction::kSendQueuedTurn &&
                         !send_turn_start()) {
                         fail_connection("turn start send failed");
@@ -864,7 +873,7 @@ void RunRecorderApp() {
                     }
                     AgentVoiceReduce(&voice_state, AgentVoiceEvent::kTurnAccepted);
                     sync_voice_control();
-                    show_voice_status("Agent is thinking");
+                    RenderAssistant(&ui_context);
                     ESP_LOGI(TAG, "Agent accepted turn: %s",
                              active_turn.paths.turn_id.c_str());
                     break;
@@ -890,7 +899,7 @@ void RunRecorderApp() {
                     reply_control = frame;
                     AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStarted);
                     sync_voice_control();
-                    show_voice_status("saving reply to SD");
+                    RenderAssistant(&ui_context);
                     break;
                 }
                 case AgentVoiceControlType::kReplyEnd: {
@@ -930,6 +939,7 @@ void RunRecorderApp() {
                         RecorderControlAction::kStartAgentReplyPlayback) {
                         automatic_play_path = active_turn.paths.assistant_wav;
                     }
+                    RenderAssistant(&ui_context);
                     ESP_LOGI(TAG, "Agent reply stored: %s",
                              active_turn.paths.assistant_wav.c_str());
                     break;
@@ -961,7 +971,6 @@ void RunRecorderApp() {
                                       !recording_failed;
                 if (!saved_ok) {
                     ESP_LOGE(TAG, "退出时录音保存失败: %s", cur_path.c_str());
-                    RecorderShowText("SAVE FAILED", "write error");
                 }
                 fclose(f);
                 f = nullptr;
@@ -978,7 +987,6 @@ void RunRecorderApp() {
                     }
                 }
             }
-            RecorderShowText("EXIT", "back to menu");
             RecorderDisplayResume();
             ESP_LOGI(TAG, "退出录音模式 -> 选择器");
             vTaskDelay(pdMS_TO_TICKS(300));
@@ -998,13 +1006,15 @@ void RunRecorderApp() {
             playing_agent_reply = true;
             AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackStarted);
             sync_voice_control();
+            RenderAssistant(&ui_context);
             ESP_LOGI(TAG, "Agent reply playback start: %s", play_path.c_str());
         }
         if (!play_path.empty() &&
             control.mode == RecorderControlMode::kPlaying && f == nullptr) {
             RecorderDisplayPause();
             const PlaybackResult result =
-                PlayWavFile(codec, play_path.c_str(), &control, &exit_requested);
+                PlayWavFile(codec, play_path.c_str(), &control, &exit_requested,
+                            &ui_context);
             RecorderControlReduce(&control, RecorderControlEvent::kPlaybackFinished);
             if (playing_agent_reply) {
                 AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackFinished);
@@ -1019,17 +1029,11 @@ void RunRecorderApp() {
                     }
                 }
             }
-            RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
-            if (!exit_requested) {
-                if (result == PlaybackResult::kDone) {
-                    RecorderShowText("PLAY DONE", Basename(play_path.c_str()));
-                } else if (result == PlaybackResult::kFailed) {
-                    RecorderShowText("PLAY FAILED", "check wav");
-                }
+            if (!exit_requested && result == PlaybackResult::kFailed) {
+                ui_notice = RecorderAssistantNotice::kPlaybackFailure;
+                ui_notice_until_ms = RecorderMonotonicMs() + 2500;
             }
-            if (playing_agent_reply && !exit_requested) {
-                show_voice_status(has_active_turn ? "next turn queued" : idle_subtitle);
-            }
+            RenderAssistant(&ui_context);
             RecorderDisplayResume();
             continue;
         }
@@ -1037,19 +1041,22 @@ void RunRecorderApp() {
         if (control.mode == RecorderControlMode::kRecording && f == nullptr) {
             // 开始录音：新建文件 + 占位头
             RecorderDisplayHideFileMenu();
-            RecorderDisplaySetState(RecorderDisplayState::kRecording, control.volume);
+            assistant_elapsed_seconds = 0;
+            ui_notice = RecorderAssistantNotice::kNone;
+            ui_notice_until_ms = 0;
+            RenderAssistant(&ui_context);
             if (!sd_ok || !SdCardIsMounted()) {
-                RecorderShowText("NO SD CARD", "cannot record");
                 control.mode = RecorderControlMode::kIdle;
-                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+                RenderAssistant(&ui_context);
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
             if (!noise_reducer.valid() || !noise_reducer.Reset()) {
                 ESP_LOGE(TAG, "录音 DSP 初始化/复位失败");
-                RecorderShowText("NS FAILED", "cannot record");
                 control.mode = RecorderControlMode::kIdle;
-                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+                ui_notice = RecorderAssistantNotice::kDspFailure;
+                ui_notice_until_ms = RecorderMonotonicMs() + 2500;
+                RenderAssistant(&ui_context);
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
@@ -1058,8 +1065,7 @@ void RunRecorderApp() {
             }
             // 先刷屏，等 LVGL 刷完再动 SD 卡：屏与 SD 卡共用 SPI2 总线，
             // 时间上错开可避免刷屏与写卡抢总线导致的闪屏（短录音尤其明显）。
-            RecorderShowText("REC 00:00",
-                             noise_reducer.noise_reduction_enabled() ? "recording" : "NS OFF");
+            RenderAssistant(&ui_context);
             FlushDisplayThenPause();
             recording_created_at_ms = RecorderNowMs();
             recording_paths = turn_store.Create(RecorderDate(), NewTurnId());
@@ -1067,9 +1073,10 @@ void RunRecorderApp() {
             f = recording_paths.valid() ? fopen(cur_path.c_str(), "wb") : nullptr;
             if (f == nullptr) {
                 ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path.c_str());
-                RecorderShowText("SAVE FAILED", "write error");
                 control.mode = RecorderControlMode::kIdle;
-                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+                ui_notice = RecorderAssistantNotice::kSaveFailure;
+                ui_notice_until_ms = RecorderMonotonicMs() + 2500;
+                RenderAssistant(&ui_context);
                 RecorderDisplayResume();
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
@@ -1102,10 +1109,11 @@ void RunRecorderApp() {
                     ESP_LOGE(TAG, "录音 DSP/写入失败: %s", cur_path.c_str());
                     control.mode = RecorderControlMode::kIdle;
                     recording_failed = true;
+                    ui_notice = RecorderAssistantNotice::kSaveFailure;
+                    ui_notice_until_ms = RecorderMonotonicMs() + 2500;
                 } else if (reached_voice_limit) {
                     ESP_LOGI(TAG, "录音达到 Agent 4 MiB 上限，自动停止");
                     control.mode = RecorderControlMode::kIdle;
-                    RecorderShowText("MAX LENGTH", "saving recording");
                 }
 
                 // 每约 1 秒刷新一次计时显示
@@ -1114,9 +1122,8 @@ void RunRecorderApp() {
                 int64_t now_ms = (int64_t)secs * 1000;
                 if (now_ms - last_disp_ms >= 1000) {
                     last_disp_ms = now_ms;
-                    char t[16];
-                    snprintf(t, sizeof(t), "REC %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
-                    RecorderShowText(t, "tap STOP to save");
+                    assistant_elapsed_seconds = secs;
+                    RenderAssistant(&ui_context);
                 }
                 RecorderDisplayResume();
             }
@@ -1138,8 +1145,9 @@ void RunRecorderApp() {
                 (noise_reducer.output_sample_rate() * sizeof(int16_t));
             if (!saved_ok) {
                 ESP_LOGE(TAG, "录音保存失败: %s", cur_path.c_str());
-                RecorderShowText("SAVE FAILED", "write error");
-                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+                ui_notice = RecorderAssistantNotice::kSaveFailure;
+                ui_notice_until_ms = RecorderMonotonicMs() + 2500;
+                RenderAssistant(&ui_context);
                 RecorderDisplayResume();
                 continue;
             }
@@ -1153,8 +1161,9 @@ void RunRecorderApp() {
                     recording_created_at_ms);
             if (!indexed) {
                 ESP_LOGE(TAG, "录音清单保存失败: %s", cur_path.c_str());
-                RecorderShowText("SAVE FAILED", "manifest/hash error");
-                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+                ui_notice = RecorderAssistantNotice::kSaveFailure;
+                ui_notice_until_ms = RecorderMonotonicMs() + 2500;
+                RenderAssistant(&ui_context);
                 RecorderDisplayResume();
                 continue;
             }
@@ -1163,18 +1172,15 @@ void RunRecorderApp() {
                      static_cast<unsigned>(secs),
                      static_cast<unsigned long long>(wav_bytes));
             ESP_LOGI(TAG, "Agent user WAV stored: %s", cur_path.c_str());
-            char saved[48];
-            snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
             load_oldest_pending();
             const AgentVoiceAction action = AgentVoiceReduce(
                 &voice_state, AgentVoiceEvent::kTurnQueued);
             sync_voice_control();
-            RecorderShowText(saved, network.IsSocketConnected() ? "sending" : "queued offline");
+            RenderAssistant(&ui_context);
             if (action == AgentVoiceAction::kSendQueuedTurn &&
                 !send_turn_start()) {
                 fail_connection("recorded turn could not start");
             }
-            RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
             RecorderDisplayResume();
         }
 

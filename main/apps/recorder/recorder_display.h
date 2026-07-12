@@ -1,6 +1,8 @@
 #ifndef RECORDER_DISPLAY_H_
 #define RECORDER_DISPLAY_H_
 
+#include "recorder_assistant_ui.h"
+
 #include <driver/i2c_master.h>
 #include <esp_err.h>
 
@@ -16,13 +18,6 @@ struct RecorderDisplayMenuItem {
 
 using RecorderDisplayCallback = void (*)(void* user_data);
 using RecorderDisplayFileCallback = void (*)(const char* path, void* user_data);
-
-enum class RecorderDisplayState {
-    kIdle,
-    kRecording,
-    kPlaying,
-    kPaused,
-};
 
 struct RecorderDisplayCallbacks {
     RecorderDisplayCallback record = nullptr;
@@ -47,15 +42,13 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
 void RecorderDisplaySetCallbacks(const RecorderDisplayCallbacks& callbacks,
                                  void* user_data);
 
-// 在屏幕居中显示一大一小两行文字（title 大字，subtitle 小字，可为 nullptr）。
-// 线程安全（内部加 lvgl 锁）。未初始化时无操作。
-void RecorderShowText(const char* title, const char* subtitle);
-
-// 一次性更新 REC/PLAY/STOP/PAUSE/RESUME 的可见性和播放音量。
-void RecorderDisplaySetState(RecorderDisplayState state, int volume);
+// 一次性渲染 AI 助手身份、连接状态、活动状态和当前唯一主操作。
+// 线程安全（内部加 LVGL 锁）。未初始化时无操作。
+void RecorderDisplayRenderAssistant(const RecorderAssistantUiModel& model);
 
 // 屏和 SD 卡共用 SPI2。执行 SD 大块读写前暂停 LVGL 刷屏，结束后恢复。
-// 暂停期间同一任务仍可调用 RecorderShowText/RecorderDisplayShowFileMenu 更新对象；
+// 暂停期间同一任务仍可调用 RecorderDisplayRenderAssistant/
+// RecorderDisplayShowFileMenu 更新对象；
 // 恢复后再统一刷新到屏幕。
 void RecorderDisplayPause();
 void RecorderDisplayResume();

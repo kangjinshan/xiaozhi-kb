@@ -93,6 +93,10 @@ RecorderAssistantUiModel RecorderBuildAssistantUi(
                 model.title = "保存失败";
                 model.subtitle = "请检查存储卡";
                 break;
+            case RecorderAssistantNotice::kPlaybackFailure:
+                model.title = "播放失败";
+                model.subtitle = "请检查录音文件";
+                break;
             case RecorderAssistantNotice::kNone:
                 break;
         }
@@ -196,4 +200,18 @@ RecorderAssistantUiModel RecorderBuildAssistantUi(
             break;
     }
     return model;
+}
+
+RecorderAssistantLayout RecorderBuildAssistantLayout(int width, int height) {
+    RecorderAssistantLayout layout;
+    layout.menu = {18, 18, 76, 42};
+    layout.brand = {(width - 180) / 2, 20, 180, 40};
+    layout.connection = {width - 138, 22, 120, 36};
+    layout.orb = {(width - 168) / 2, 76, 168, 168};
+    layout.title = {30, 248, width - 60, 40};
+    layout.subtitle = {30, 289, width - 60, 32};
+    layout.metric = {30, 321, width - 60, 28};
+    layout.primary = {(width - 340) / 2, 354, 340, 64};
+    layout.history = {(width - 150) / 2, height - 50, 150, 40};
+    return layout;
 }

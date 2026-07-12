@@ -108,8 +108,17 @@ void TestAgentTurnAudioStaysAdjacentNewestFirst() {
           "newest turn files remain adjacent");
     Check(entries[0].name == "assistant.wav" && entries[1].name == "user.wav",
           "assistant and user recordings have stable ordering");
+    Check(RecorderConversationLabel(entries[0]) == "AI 回复",
+          "assistant audio is labeled as an AI reply");
+    Check(RecorderConversationLabel(entries[1]) == "你",
+          "user audio is labeled as the user");
     Check(entries[2].turn_id == "turn-100" && entries[3].turn_id == "turn-100",
           "older turn follows newest turn");
+
+    RecorderFileEntry legacy;
+    legacy.name = "rec7.wav";
+    Check(RecorderConversationLabel(legacy) == "录音",
+          "legacy audio has a neutral label");
 
     for (const auto& entry : entries) {
         unlink(entry.path.c_str());
