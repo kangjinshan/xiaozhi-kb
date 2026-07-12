@@ -17,7 +17,7 @@
 - Modify: `main/apps/recorder/recorder_control_state.cc`
 - Modify: `main/apps/recorder/recorder_control_state_test.cc`
 
-- [ ] **Step 1: Write the failing reducer test**
+- [x] **Step 1: Write the failing reducer test**
 
 Add `TestPowerKeyTogglesScreenWithoutChangingAssistantMode()` and call it from
 `main()`:
@@ -47,7 +47,7 @@ void TestPowerKeyTogglesScreenWithoutChangingAssistantMode() {
 }
 ```
 
-- [ ] **Step 2: Run the reducer test and verify RED**
+- [x] **Step 2: Run the reducer test and verify RED**
 
 Run:
 
@@ -63,7 +63,7 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 Expected: compilation fails because `kPhysicalPower`,
 `kScreenPowerChanged`, and `screen_on` do not exist.
 
-- [ ] **Step 3: Implement the minimal reducer transition**
+- [x] **Step 3: Implement the minimal reducer transition**
 
 Add `kPhysicalPower`, `kScreenPowerChanged`, and `bool screen_on = true`. Before
 mode-specific handling in `RecorderControlReduce()` add:
@@ -75,12 +75,12 @@ if (event == RecorderControlEvent::kPhysicalPower) {
 }
 ```
 
-- [ ] **Step 4: Run the reducer test and verify GREEN**
+- [x] **Step 4: Run the reducer test and verify GREEN**
 
 Run the Step 2 command. Expected:
 `recorder_control_state_test passed`.
 
-- [ ] **Step 5: Commit the pure transition**
+- [x] **Step 5: Commit the pure transition**
 
 ```bash
 git add main/apps/recorder/recorder_control_state.h \
@@ -96,7 +96,7 @@ git commit -m "feat(recorder): model PWR screen state"
 - Modify: `main/apps/recorder/recorder_display.h`
 - Modify: `main/apps/recorder/recorder_display.cc`
 
-- [ ] **Step 1: Re-run the existing PMIC decoder test**
+- [x] **Step 1: Re-run the existing PMIC decoder test**
 
 ```bash
 c++ -std=c++17 -Wall -Wextra -Werror \
@@ -109,7 +109,7 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 Expected: exit 0, proving IRQ2 `0x08` is the short-press signal and long-press
 bit `0x04` is ignored.
 
-- [ ] **Step 2: Enable and poll the AXP2101 short-press IRQ**
+- [x] **Step 2: Enable and poll the AXP2101 short-press IRQ**
 
 In `recorder_app.cc`, include `keyboard_pmic_power_key.h`, add register
 constants `0x41`, `0x48`, `0x49`, `0x4A`, and add `ReadReg()`,
@@ -126,7 +126,7 @@ PublishRequest(RecorderControlEvent::kPhysicalPower);
 Start it after display callbacks are registered and only when PMIC IRQ
 configuration succeeded.
 
-- [ ] **Step 3: Add the display transition API**
+- [x] **Step 3: Add the display transition API**
 
 In `recorder_display.h` declare:
 
@@ -141,7 +141,7 @@ that pause held. On must send display-on, invalidate `lv_screen_active()`, then
 call `RecorderDisplayResume()`. If a panel command fails, keep the prior applied
 state and balance the pause depth.
 
-- [ ] **Step 4: Apply the transition from the Recorder main task**
+- [x] **Step 4: Apply the transition from the Recorder main task**
 
 In `ApplyRequest()`, handle `kScreenPowerChanged` before audio side effects:
 
@@ -157,7 +157,7 @@ if (err != ESP_OK) {
 This keeps all SPI2 panel commands in the Recorder main task, including while
 playback drains requests.
 
-- [ ] **Step 5: Build the firmware**
+- [x] **Step 5: Build the firmware**
 
 ```bash
 source ~/esp/esp-idf/export.sh
@@ -167,7 +167,7 @@ nm build/esp-idf/main/libmain.a | rg ' U ns_(create|pro_create)$'
 
 Expected: build exits 0 and only `U ns_create` is present.
 
-- [ ] **Step 6: Commit hardware integration**
+- [x] **Step 6: Commit hardware integration**
 
 ```bash
 git add main/apps/recorder/recorder_app.cc \
@@ -185,18 +185,18 @@ git commit -m "feat(recorder): toggle AMOLED with PWR"
 - Modify: `docs/recorder-design-guardrails.md`
 - Modify: `docs/superpowers/plans/2026-07-12-recorder-pwr-screen-toggle.md`
 
-- [ ] **Step 1: Document the PWR contract and SPI2 invariant**
+- [x] **Step 1: Document the PWR contract and SPI2 invariant**
 
 State that Recorder PWR short press toggles only AMOLED visibility, background
 voice work continues, touch does not wake it, and the display-off hold nests
 with all existing SD pauses. Preserve keyboard and XiaoZhi behavior.
 
-- [ ] **Step 2: Run all Recorder host tests**
+- [x] **Step 2: Run all Recorder host tests**
 
 Run every command in `docs/recorder-design-guardrails.md`, plus the keyboard
 PMIC decoder test. Expected: all commands exit 0.
 
-- [ ] **Step 3: Run the complete firmware build and hygiene checks**
+- [x] **Step 3: Run the complete firmware build and hygiene checks**
 
 ```bash
 source ~/esp/esp-idf/export.sh

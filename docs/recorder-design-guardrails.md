@@ -32,6 +32,11 @@ Current guard implementation:
 
 - `RecorderDisplayPause()` / `RecorderDisplayResume()` in
   `main/apps/recorder/recorder_display.*`.
+- Recorder mode enables the AXP2101 IRQ2 short-press bit. Its PMIC polling task
+  only publishes `kPhysicalPower`; the Recorder main task performs SH8601
+  display-off/on. Screen-off holds one persistent LVGL pause that nests with
+  every SD pause, while recording, playback, Wi-Fi, WSS, Agent work and SD
+  persistence continue. Touch does not wake the stopped LVGL task.
 - Recorder-mode SH8601 invalidation areas are expanded to even start
   coordinates and odd end coordinates. Without this panel requirement, the
   old PAUSE border can remain as two colored scanlines on the PLAY DONE screen.
@@ -231,3 +236,6 @@ Real-device acceptance checks:
 - Playback left/right clicks adjust volume by +10/-10 and clamp it to 0–100.
 - A short `MENU` press does nothing; a continuous two-second hold returns to
   the application selector.
+- A PWR short press turns only the AMOLED off, a second short press turns it on
+  and redraws the current assistant state. Background voice and network work
+  continue while dark, and touch does not wake the screen.

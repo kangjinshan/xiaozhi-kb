@@ -1,6 +1,6 @@
 # Waveshare ESP32-C6 Touch AMOLED 2.16 板级开发指南
 
-> 最后更新：2026-07-11
+> 最后更新：2026-07-12
 > 位置：`main/boards/waveshare/esp32-c6-touch-amoled-2.16/`
 
 ## 1. 概述
@@ -32,11 +32,11 @@
 
 - AMOLED QSPI 与 SD SPI 共用 SPI2：CLK=GPIO0、LCD D0/SD MOSI=GPIO1、LCD D1/SD MISO=GPIO2；LCD CS=GPIO15，SD CS=GPIO6。
 - GPIO12/GPIO13 是 USB D-/D+，禁止扫描或初始化为普通 GPIO。
-- GPIO9 是 BOOT，GPIO10 是左键。中间 PWR 键接 AXP2101，长按可能硬件关机。
+- GPIO9 是 BOOT，GPIO10 是左键。中间 PWR 键接 AXP2101；金山 AI 模式短按切换 AMOLED 息屏/亮屏，键盘模式短按发送 HID 键，长按仍可能硬件关机。
 - SH8601 无 reset GPIO，通过 `Pmic_SetAldo3()` 执行供电复位。
 - `CustomLcdDisplay::rounder_event_cb()` 必须把无效区域扩展到偶数起点、奇数终点，满足 SH8601 刷新区域要求。
 - 小智模式只挂载 SD，不调用 `SdCardLogStart()`。同步日志 hook 会在 Wi-Fi `sys_evt` 任务的 2304 字节栈内执行 FATFS 写入并造成 `Stack protection fault`。
-- 录音模式有自己的显示和 SD 初始化路径；录音、Agent 上传读取、回复分块落卡、SHA-256 扫描和清单更新全部在主任务中使用 `RecorderDisplayPause()` / `RecorderDisplayResume()` 协调 SPI2。网络回调只能复制有界事件，不能碰 FATFS 或 LVGL。
+- 录音模式有自己的显示和 SD 初始化路径；录音、Agent 上传读取、回复分块落卡、SHA-256 扫描和清单更新全部在主任务中使用 `RecorderDisplayPause()` / `RecorderDisplayResume()` 协调 SPI2。金山 AI 息屏持有一层额外 pause，允许 SD pause 继续嵌套；PMIC 轮询任务只发布 PWR 请求，SH8601 开关屏命令必须由 Recorder 主任务执行。网络回调只能复制有界事件，不能碰 FATFS 或 LVGL。
 
 ## 5. 已确认故障与诊断
 
@@ -57,6 +57,7 @@
 ## 6. 常见修改场景
 
 - 调整按键：修改 `config.h` 和 `InitializeButtons()`，同时检查 BOOT 下载模式与 PWR 硬件行为。
+- 调整金山 AI PWR 息屏：同时检查 AXP2101 IRQ2 `0x08` 解码、请求队列、SH8601 on/off、LVGL pause 深度和息屏期间的 SD/WSS 连续性；触摸不得负责唤醒。
 - 调整屏幕方向/区域：修改 `DISPLAY_*` 或 `rounder_event_cb()`，真机检查完整刷新和局部刷新。
 - 调整 SD 初始化：保持 LVGL 停止和锁覆盖整个 `SdCardMount(false)`；失败路径也必须恢复 LVGL。
 - 恢复小智 SD 日志：禁止直接调用现有 `SdCardLogStart()`；应先把日志写入改为有界队列 + 独立大栈任务，再验证丢弃策略和 SPI2 仲裁。
@@ -71,3 +72,5 @@ idf.py build
 ```
 
 修改复位、OTA、NVS 或 USB 相关代码后还要做物理冷启动验证。自动复位失败时：拔 USB 和电池，等待 20 秒后不按 BOOT 重新上电。
+
+修改金山 AI PWR 行为后还要真机短按两次，依次确认 `PWR screen off` / `PWR screen on`，并确认 WSS 保持 ready、屏幕恢复当前状态，且没有 SPI2 断言、栈故障、Guru Meditation、队列溢出或重启。

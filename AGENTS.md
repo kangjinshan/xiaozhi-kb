@@ -46,6 +46,7 @@
   - 展示规则：`金山 AI` 静态界面只保留一个主按钮，语义为 `点击说话` / `发送` / `暂停` / `继续`；发送、思考和接收阶段禁用主按钮。
   - 字体规则：固定中文文案从 `xiaozhi-fonts/ttf/puhui-common.ttf` 生成 `font_puhui_assistant_24_4.c` 子集；动态历史文本复用 assets 中的 `font_puhui_common_30_4.bin`，不得把完整字体重复链接进应用镜像。
   - 历史规则：只读取不超过 16 KiB 的正式 `turn.json`，将 `transcript` / `reply_text` 映射到 `你` / `AI 回复`；优先按追加式 `turns.jsonl` 的完成顺序排列旧 turn，每次展示重置到最新记录所在的顶部，截断不得拆开一轮；缺失或损坏时退回文件大小，禁止读取 `.part` / `.bak`。
+  - 电源键规则：AXP2101 PWR 短按仅切换 AMOLED 息屏/亮屏；录音、播放、Wi-Fi、WSS、Agent 和 SD 工作继续，触摸不唤醒，长按仍由硬件管理。
   - 副作用：新 turn 写 `/sdcard/agent/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧 `/sdcard/rec/recN.wav` 仅保留播放兼容。
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
@@ -53,7 +54,7 @@
   - 副作用：将用户与助手 WAV/清单写入 `/sdcard/agent/`；回复块落卡后才发送累计字节 ACK；确定性失败保留用户 WAV、原子标记 `failed` 并退出待发送队列。
 - **AMOLED 与 SD 卡共享 SPI2**
   - 入口：目标板构造函数和 `RecorderDisplayPause()` / `RecorderDisplayResume()`
-  - 核心逻辑：SD 初始化或大块 I/O 前停止 LVGL 并取得 LVGL 锁
+  - 核心逻辑：SD 初始化或大块 I/O 前停止 LVGL 并取得 LVGL 锁；金山 AI 息屏额外持有一层可嵌套 pause，SH8601 命令只在 Recorder 主任务执行
   - 失败表现：`spi_hal_setup_trans ... running_cmd == 0`，设备约每秒重启并闪屏。
 - **真机稳定性验证**
   - 入口：`scripts/verify_selector_stability.py`、`scripts/verify_xiaozhi_stability.py`
@@ -65,6 +66,7 @@
 - 固定使用 ESP-IDF 5.5.3 和 `esp32c6`；干净构建必须保留 `CONFIG_BOARD_TYPE_WAVESHARE_ESP32_C6_TOUCH_AMOLED_2_16=y`。
 - GPIO12/GPIO13 是 USB D-/D+，禁止配置为普通 GPIO。GPIO9 是 BOOT，GPIO10 是左键；中间 PWR 键属于 AXP2101，不是普通 GPIO。
 - AMOLED 与 SD 卡共用 SPI2（GPIO0/1/2，独立 CS）。禁止在 LVGL 刷新未暂停时初始化 SDSPI 或执行录音模式的大块 SD I/O。
+- 金山 AI 模式的 AXP2101 PMIC 轮询任务只能向 Recorder 请求队列发布 PWR 事件，禁止直接调用 SH8601、LVGL、SD、codec 或网络；息屏 pause 必须与现有 SD pause 正确嵌套。
 - 小智模式禁止调用 `SdCardLogStart()`：`sys_evt` 栈只有 2304 字节，`SdCardLogVprintf()` 同步执行 `vsnprintf`、FATFS 和 `fwrite` 会触发栈保护故障。录音模式同样禁止启用该 hook，以免日志写卡与刷屏争用 SPI2。
 - SD 卡仍可在小智和录音模式挂载；禁用的是同步日志落盘，不是文件读写。小智/录音日志走 USB 串口。
 - 不要用不受控的 DTR/RTS 序列做运行态验证。安全监听状态为 `dtr=True, rts=False`；异常时做拔 USB、拔电池、等待 20 秒后的物理冷启动。
