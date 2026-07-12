@@ -67,6 +67,10 @@ list(APPEND SOURCES "apps/recorder/recorder_file_list.cc")
 list(APPEND SOURCES "apps/recorder/recorder_rate_converter.cc")
 list(APPEND SOURCES "apps/recorder/recorder_noise_reducer.cc")
 list(APPEND SOURCES "apps/recorder/recorder_wav_file.cc")
+list(APPEND SOURCES "apps/recorder/agent_voice_state.cc")
+list(APPEND SOURCES "apps/recorder/agent_turn_store.cc")
+list(APPEND SOURCES "apps/recorder/agent_voice_protocol.cc")
+list(APPEND SOURCES "apps/recorder/recorder_network.cc")
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps" "apps/ble_keyboard" "sdcard" "apps/recorder")
 

@@ -922,4 +922,16 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 
+config AGENT_VOICE_URL
+    string "Agent voice WebSocket URL"
+    default "wss://agent.jinshanweb.com/api/device/voice/ws"
+    help
+        TLS WebSocket endpoint used by the standalone Recorder/Agent mode.
+
+config AGENT_VOICE_TOKEN
+    string "Agent voice device token"
+    default ""
+    help
+        Per-device bearer token. Keep sdkconfig ignored and never commit this value.
+
 endmenu
