@@ -173,8 +173,8 @@ void BuildSelectorUI(Display* display) {
                      lv_color_hex(0x2E8BFF),
                      &kXiaozhiContext);
     CreateModeButton(list,
-                     "REC",
-                     "Recorder",
+                     "JS",
+                     "Jinshan AI",
                      lv_color_hex(0x26A269),
                      &kRecorderContext);
     CreateModeButton(list,
