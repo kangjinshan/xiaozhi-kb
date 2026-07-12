@@ -1,6 +1,7 @@
 #ifndef AGENT_VOICE_PROTOCOL_H_
 #define AGENT_VOICE_PROTOCOL_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -49,5 +50,7 @@ bool AgentVoiceParseControl(const std::string& json,
 
 bool AgentVoiceSafeTurnId(const std::string& turn_id);
 bool AgentVoiceSha256Text(const std::string& sha256);
+size_t AgentVoiceClampPcmSamples(uint64_t current_data_bytes,
+                                size_t requested_samples);
 
 #endif  // AGENT_VOICE_PROTOCOL_H_

@@ -86,6 +86,41 @@ void TestRecordingListSortsNewestFirst() {
     rmdir(dir);
 }
 
+void TestAgentTurnAudioStaysAdjacentNewestFirst() {
+    char dir_template[] = "/tmp/recorder-agent-menu-test-XXXXXX";
+    char* root = mkdtemp(dir_template);
+    Check(root != nullptr, "mkdtemp agent root");
+    const std::string date = std::string(root) + "/20260712";
+    const std::string older = date + "/turn-100";
+    const std::string newer = date + "/turn-200";
+    Check(mkdir(date.c_str(), 0700) == 0, "create date directory");
+    Check(mkdir(older.c_str(), 0700) == 0, "create older turn");
+    Check(mkdir(newer.c_str(), 0700) == 0, "create newer turn");
+    WriteBytes(older + "/user.wav", "old-user");
+    WriteBytes(older + "/assistant.wav", "old-assistant");
+    WriteBytes(newer + "/user.wav", "new-user");
+    WriteBytes(newer + "/assistant.wav", "new-assistant");
+    WriteBytes(newer + "/assistant.wav.part", "ignored");
+
+    auto entries = RecorderListAgentRecordings(root, 8);
+    Check(entries.size() == 4, "both complete files from each turn are listed");
+    Check(entries[0].turn_id == "turn-200" && entries[1].turn_id == "turn-200",
+          "newest turn files remain adjacent");
+    Check(entries[0].name == "assistant.wav" && entries[1].name == "user.wav",
+          "assistant and user recordings have stable ordering");
+    Check(entries[2].turn_id == "turn-100" && entries[3].turn_id == "turn-100",
+          "older turn follows newest turn");
+
+    for (const auto& entry : entries) {
+        unlink(entry.path.c_str());
+    }
+    unlink((newer + "/assistant.wav.part").c_str());
+    rmdir(newer.c_str());
+    rmdir(older.c_str());
+    rmdir(date.c_str());
+    rmdir(root);
+}
+
 void TestCanonicalWavHeaderIsAccepted() {
     uint8_t header[44];
     BuildCanonicalWav(header, 1, 1, 24000, 16, 48000);
@@ -124,6 +159,7 @@ void TestUnsupportedWavHeaderIsRejected() {
 
 int main() {
     TestRecordingListSortsNewestFirst();
+    TestAgentTurnAudioStaysAdjacentNewestFirst();
     TestCanonicalWavHeaderIsAccepted();
     TestUnsupportedWavHeaderIsRejected();
     std::puts("recorder_playback_menu_test passed");

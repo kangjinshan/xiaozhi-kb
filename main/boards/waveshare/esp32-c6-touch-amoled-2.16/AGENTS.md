@@ -36,7 +36,7 @@
 - SH8601 无 reset GPIO，通过 `Pmic_SetAldo3()` 执行供电复位。
 - `CustomLcdDisplay::rounder_event_cb()` 必须把无效区域扩展到偶数起点、奇数终点，满足 SH8601 刷新区域要求。
 - 小智模式只挂载 SD，不调用 `SdCardLogStart()`。同步日志 hook 会在 Wi-Fi `sys_evt` 任务的 2304 字节栈内执行 FATFS 写入并造成 `Stack protection fault`。
-- 录音模式有自己的显示和 SD 初始化路径；其大块 SD I/O 使用 `RecorderDisplayPause()` / `RecorderDisplayResume()` 协调 SPI2。
+- 录音模式有自己的显示和 SD 初始化路径；录音、Agent 上传读取、回复分块落卡、SHA-256 扫描和清单更新全部在主任务中使用 `RecorderDisplayPause()` / `RecorderDisplayResume()` 协调 SPI2。网络回调只能复制有界事件，不能碰 FATFS 或 LVGL。
 
 ## 5. 已确认故障与诊断
 

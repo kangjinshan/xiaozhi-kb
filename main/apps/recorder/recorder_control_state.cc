@@ -12,6 +12,17 @@ RecorderControlAction ChangeVolume(RecorderControlState* state, int delta) {
         : RecorderControlAction::kVolumeChanged;
 }
 
+bool AgentTurnBlocksRecording(const RecorderControlState& state) {
+    if (state.voice_turn_pending) {
+        return true;
+    }
+    return state.voice_phase == AgentVoicePhase::kSending ||
+           state.voice_phase == AgentVoicePhase::kThinking ||
+           state.voice_phase == AgentVoicePhase::kReceiving ||
+           state.voice_phase == AgentVoicePhase::kReadyToPlay ||
+           state.voice_phase == AgentVoicePhase::kPlaying;
+}
+
 }  // namespace
 
 RecorderControlAction RecorderControlReduce(RecorderControlState* state,
@@ -29,14 +40,21 @@ RecorderControlAction RecorderControlReduce(RecorderControlState* state,
         }
         return RecorderControlAction::kNone;
     }
+    if (event == RecorderControlEvent::kAgentReplyReady &&
+        state->mode == RecorderControlMode::kIdle) {
+        state->mode = RecorderControlMode::kPlaying;
+        return RecorderControlAction::kStartAgentReplyPlayback;
+    }
 
     switch (state->mode) {
         case RecorderControlMode::kIdle:
-            if (event == RecorderControlEvent::kTouchRecord) {
+            if (event == RecorderControlEvent::kTouchRecord &&
+                !AgentTurnBlocksRecording(*state)) {
                 state->mode = RecorderControlMode::kRecording;
                 return RecorderControlAction::kStartRecording;
             }
-            if (event == RecorderControlEvent::kTouchPlay) {
+            if (event == RecorderControlEvent::kTouchPlay &&
+                !state->voice_turn_pending) {
                 return RecorderControlAction::kOpenPlaybackMenu;
             }
             if (event == RecorderControlEvent::kPlaybackSelected) {

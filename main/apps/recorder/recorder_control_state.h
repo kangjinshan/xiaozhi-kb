@@ -1,6 +1,8 @@
 #ifndef RECORDER_CONTROL_STATE_H_
 #define RECORDER_CONTROL_STATE_H_
 
+#include "agent_voice_state.h"
+
 #include <cstdint>
 
 enum class RecorderControlMode {
@@ -19,6 +21,7 @@ enum class RecorderControlEvent {
     kPhysicalRight,
     kPlaybackSelected,
     kPlaybackFinished,
+    kAgentReplyReady,
     kExitRequested,
 };
 
@@ -31,12 +34,15 @@ enum class RecorderControlAction {
     kResumePlayback,
     kVolumeChanged,
     kStartPlayback,
+    kStartAgentReplyPlayback,
     kExit,
 };
 
 struct RecorderControlState {
     RecorderControlMode mode = RecorderControlMode::kIdle;
     int volume = 70;
+    AgentVoicePhase voice_phase = AgentVoicePhase::kOffline;
+    bool voice_turn_pending = false;
 };
 
 RecorderControlAction RecorderControlReduce(RecorderControlState* state,

@@ -26,6 +26,46 @@ void TestTouchRecordAndStop() {
     Check(state.mode == RecorderControlMode::kIdle, "idle state restored");
 }
 
+void TestAgentVoicePhaseGatesRecordingAndStartsReplyPlayback() {
+    RecorderControlState offline;
+    offline.voice_phase = AgentVoicePhase::kOffline;
+    Check(RecorderControlReduce(&offline, RecorderControlEvent::kTouchRecord) ==
+              RecorderControlAction::kStartRecording,
+          "recording remains available offline");
+
+    for (AgentVoicePhase phase : {
+             AgentVoicePhase::kSending,
+             AgentVoicePhase::kThinking,
+             AgentVoicePhase::kReceiving,
+         }) {
+        RecorderControlState busy;
+        busy.voice_phase = phase;
+        Check(RecorderControlReduce(&busy, RecorderControlEvent::kTouchRecord) ==
+                  RecorderControlAction::kNone,
+              "recording is rejected while an Agent turn is active");
+        Check(busy.mode == RecorderControlMode::kIdle,
+              "rejected recording remains idle");
+    }
+
+    RecorderControlState queued;
+    queued.voice_phase = AgentVoicePhase::kOffline;
+    queued.voice_turn_pending = true;
+    Check(RecorderControlReduce(&queued, RecorderControlEvent::kTouchRecord) ==
+              RecorderControlAction::kNone,
+          "offline queued turn blocks a second recording");
+    Check(RecorderControlReduce(&queued, RecorderControlEvent::kTouchPlay) ==
+              RecorderControlAction::kNone,
+          "queued turn blocks manual playback from starving network events");
+
+    RecorderControlState reply;
+    reply.voice_phase = AgentVoicePhase::kReadyToPlay;
+    Check(RecorderControlReduce(&reply, RecorderControlEvent::kAgentReplyReady) ==
+              RecorderControlAction::kStartAgentReplyPlayback,
+          "completed Agent reply starts playback");
+    Check(reply.mode == RecorderControlMode::kPlaying,
+          "Agent reply enters playing state");
+}
+
 void TestIdlePlayOpensMenuAndSelectionStartsPlayback() {
     RecorderControlState state;
     Check(RecorderControlReduce(&state, RecorderControlEvent::kTouchPlay) ==
@@ -119,6 +159,7 @@ void TestMenuHoldTiming() {
 
 int main() {
     TestTouchRecordAndStop();
+    TestAgentVoicePhaseGatesRecordingAndStartsReplyPlayback();
     TestIdlePlayOpensMenuAndSelectionStartsPlayback();
     TestRecordingIgnoresPhysicalKeys();
     TestIdleIgnoresPhysicalKeys();

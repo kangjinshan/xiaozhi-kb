@@ -43,7 +43,7 @@
 - **SD 卡录音和回放**
   - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
   - 核心逻辑：`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
-  - 副作用：读写 `/sdcard/rec/recN.wav`，停止后可经串口回传 base64 WAV。
+  - 副作用：新 turn 写 `/sdcard/agent/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧 `/sdcard/rec/recN.wav` 仅保留播放兼容。
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
   - 核心逻辑：持久 WSS、4096 字节有界传输、turn 幂等状态和 SD 原子文件
@@ -68,6 +68,7 @@
 - 修改 NVS、OTA 或分区后，至少验证冷启动、软重启和三种应用切换。不要覆盖用户的全盘备份或无理由擦除 NVS。
 - 录音改动必须执行 `docs/recorder-design-guardrails.md` 中列出的主机测试，并运行 `idf.py build`。
 - Agent 回复禁止在网络回调中直接写 SD；主任务每成功落卡一个块后发送 `reply_chunk_saved`，服务端收到精确累计字节 ACK 才能继续发送。`assistant.wav.part` 永远不可播放。
+- 单个上传 WAV 上限为 4 MiB；录音链路必须预留 DSP flush 空间并自动停止，不能生成永久无法上传的队列项。设备 token 只允许存在于忽略的 `sdkconfig` 和构建产物。
 
 ### 已确认故障（2026-07-11）
 

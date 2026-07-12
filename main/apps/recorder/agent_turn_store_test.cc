@@ -84,15 +84,26 @@ int main() {
     assert(access((interrupted.assistant_wav + ".part").c_str(), F_OK) != 0);
 
     AgentTurnStore restarted(root);
+    WriteFile(interrupted.assistant_wav + ".part", reply_wav);
     pending = restarted.ListPending();
     assert(pending.size() == 1);
     assert(pending[0].paths.turn_id == "turn-2");
     assert(access(pending[0].paths.user_wav.c_str(), F_OK) == 0);
+    assert(access((pending[0].paths.assistant_wav + ".part").c_str(), F_OK) != 0);
 
     AgentTurnPaths missing_manifest = store.Create("20260712", "turn-3");
     assert(missing_manifest.valid());
     assert(!store.BeginReply(missing_manifest, reply_wav.size(), reply_hash));
     assert(access((missing_manifest.assistant_wav + ".part").c_str(), F_OK) != 0);
+
+    AgentTurnPaths older = store.Create("20260711", "turn-oldest");
+    assert(older.valid());
+    WriteFile(older.user_wav, user_wav);
+    assert(store.MarkRecorded(older, user_wav.size(), user_hash, 1000));
+    pending = store.ListPending();
+    assert(pending.size() == 2);
+    assert(pending[0].paths.turn_id == "turn-oldest");
+    assert(pending[1].paths.turn_id == "turn-2");
 
     AgentTurnPaths unsafe = store.Create("20260712", "../escape");
     assert(!unsafe.valid());

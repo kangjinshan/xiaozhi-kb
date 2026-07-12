@@ -1,5 +1,6 @@
 #include "agent_voice_protocol.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
@@ -81,6 +82,21 @@ bool ParseTurnId(const std::string& json,
 }
 
 }  // namespace
+
+size_t AgentVoiceClampPcmSamples(uint64_t current_data_bytes,
+                                size_t requested_samples) {
+    constexpr uint64_t kWavHeaderBytes = 44;
+    constexpr uint64_t kFlushReserveBytes = 640;
+    constexpr uint64_t kDataLimit =
+        kAgentVoiceMaxBytes - kWavHeaderBytes - kFlushReserveBytes;
+    if (current_data_bytes >= kDataLimit) {
+        return 0;
+    }
+    const uint64_t remaining_samples =
+        (kDataLimit - current_data_bytes) / sizeof(int16_t);
+    return static_cast<size_t>(std::min<uint64_t>(
+        requested_samples, remaining_samples));
+}
 
 bool AgentVoiceSafeTurnId(const std::string& turn_id) {
     if (turn_id.empty() || turn_id.size() > 64) {

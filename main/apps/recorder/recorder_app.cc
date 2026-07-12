@@ -1,6 +1,9 @@
 #include "recorder_app.h"
 #include "recorder_display.h"
 
+#include "agent_turn_store.h"
+#include "agent_voice_protocol.h"
+#include "agent_voice_state.h"
 #include "config.h"
 #include "sdcard.h"
 #include "button.h"
@@ -9,24 +12,28 @@
 #include "recorder_file_list.h"
 #include "recorder_control_state.h"
 #include "recorder_noise_reducer.h"
+#include "recorder_network.h"
 #include "recorder_rate_converter.h"
 #include "recorder_wav_file.h"
 
 #include <driver/i2c_master.h>
 #include <esp_log.h>
+#include <esp_random.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 #include <cstdio>
+#include <ctime>
 #include <cstring>
-#include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <algorithm>
 #include <deque>
 #include <mutex>
 #include <string>
 #include <vector>
-#include <mbedtls/base64.h>
+#include <mbedtls/sha256.h>
 
 #define TAG "recorder_app"
 
@@ -35,6 +42,7 @@ namespace {
 constexpr uint8_t kAxp2101Address = 0x34;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
 const char* kRecDir = "/sdcard/rec";
+const char* kAgentRoot = "/sdcard/agent";
 constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
 constexpr size_t kPlaybackReadSamples = 4096;
 
@@ -100,23 +108,6 @@ esp_err_t InitI2cAndPmic() {
     return ESP_OK;
 }
 
-// 扫描 /sdcard/rec，返回下一个可用 recNNN.wav 序号
-int NextRecIndex() {
-    int max_idx = -1;
-    DIR* dir = opendir(kRecDir);
-    if (dir != nullptr) {
-        struct dirent* ent;
-        while ((ent = readdir(dir)) != nullptr) {
-            int idx = -1;
-            if (sscanf(ent->d_name, "rec%d.wav", &idx) == 1 && idx > max_idx) {
-                max_idx = idx;
-            }
-        }
-        closedir(dir);
-    }
-    return max_idx + 1;
-}
-
 // 写 44 字节 WAV 头。data_bytes=0 时为占位（录音结束再回填）。
 void WriteWavHeader(FILE* f, uint32_t sample_rate, uint16_t channels,
                     uint16_t bits, uint32_t data_bytes) {
@@ -162,35 +153,95 @@ bool FinishRecording(FILE* file,
         return false;
     }
     WriteWavHeader(file, reducer->output_sample_rate(), 1, 16, *data_bytes);
-    return std::fflush(file) == 0;
+    return std::fflush(file) == 0 && fsync(fileno(file)) == 0;
 }
 
-// 把 WAV 文件经串口 base64 回传（免拔卡即可在电脑端还原分析）。
-// 用固定标记包裹，电脑端脚本据此提取。数据走 printf 直出 stdout，
-// 不经 ESP_LOG（避免被日志 hook 加前缀/写卡）。
-void DumpWavOverSerial(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (f == nullptr) {
-        return;
+uint64_t RecorderNowMs() {
+    const time_t now = time(nullptr);
+    if (now >= 1577836800) {
+        return static_cast<uint64_t>(now) * 1000ULL;
     }
-    fseek(f, 0, SEEK_END);
-    long total = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    return static_cast<uint64_t>(esp_timer_get_time() / 1000);
+}
 
-    printf("\n<<<WAV_BEGIN %s %ld>>>\n", path, total);
-    unsigned char in[900];   // 900 是 3 的倍数，base64 不产生跨块填充
-    unsigned char out[1220];
-    size_t n;
-    while ((n = fread(in, 1, sizeof(in), f)) > 0) {
-        size_t olen = 0;
-        if (mbedtls_base64_encode(out, sizeof(out), &olen, in, n) == 0) {
-            fwrite(out, 1, olen, stdout);
-            fputc('\n', stdout);
+uint64_t RecorderMonotonicMs() {
+    return static_cast<uint64_t>(esp_timer_get_time() / 1000);
+}
+
+std::string RecorderDate() {
+    const time_t now = time(nullptr);
+    if (now < 1577836800) {
+        return "19700101";
+    }
+    struct tm local = {};
+    localtime_r(&now, &local);
+    char date[9];
+    return strftime(date, sizeof(date), "%Y%m%d", &local) == 8
+        ? std::string(date)
+        : std::string("19700101");
+}
+
+std::string NewTurnId() {
+    char turn_id[48];
+    std::snprintf(turn_id, sizeof(turn_id), "turn-%llu-%08lx",
+                  static_cast<unsigned long long>(RecorderNowMs()),
+                  static_cast<unsigned long>(esp_random()));
+    return turn_id;
+}
+
+std::string DigestHex(const unsigned char digest[32]) {
+    static const char kHex[] = "0123456789abcdef";
+    std::string output(64, '0');
+    for (size_t index = 0; index < 32; ++index) {
+        output[index * 2] = kHex[digest[index] >> 4];
+        output[index * 2 + 1] = kHex[digest[index] & 0x0F];
+    }
+    return output;
+}
+
+bool HashSdFile(const std::string& path,
+                uint64_t* file_bytes,
+                std::string* sha256) {
+    if (file_bytes == nullptr || sha256 == nullptr) {
+        return false;
+    }
+    RecorderDisplayPause();
+    FILE* file = fopen(path.c_str(), "rb");
+    RecorderDisplayResume();
+    if (file == nullptr) {
+        return false;
+    }
+    mbedtls_sha256_context context;
+    mbedtls_sha256_init(&context);
+    bool ok = mbedtls_sha256_starts(&context, 0) == 0;
+    uint64_t total = 0;
+    std::vector<unsigned char> buffer(kAgentVoiceMaxChunkBytes);
+    while (ok) {
+        RecorderDisplayPause();
+        const size_t size = fread(buffer.data(), 1, buffer.size(), file);
+        const bool read_failed = ferror(file) != 0;
+        RecorderDisplayResume();
+        if (size > 0) {
+            ok = mbedtls_sha256_update(&context, buffer.data(), size) == 0;
+            total += size;
+        }
+        if (size < buffer.size()) {
+            ok = ok && !read_failed;
+            break;
         }
     }
-    fclose(f);
-    printf("<<<WAV_END>>>\n");
-    fflush(stdout);
+    RecorderDisplayPause();
+    fclose(file);
+    RecorderDisplayResume();
+    unsigned char digest[32];
+    ok = ok && mbedtls_sha256_finish(&context, digest) == 0;
+    mbedtls_sha256_free(&context);
+    if (!ok) {
+        return false;
+    }
+    *file_bytes = total;
+    *sha256 = DigestHex(digest);
+    return true;
 }
 
 void PublishRequest(RecorderControlEvent event, const char* path = nullptr) {
@@ -290,11 +341,21 @@ void FlushDisplayThenPause(uint32_t ms = 90) {
 
 void ShowPlaybackMenu() {
     std::vector<RecorderDisplayMenuItem> menu_items;
-    auto entries = RecorderListRecordings(kRecDir, 32);
+    auto entries = RecorderListAgentRecordings(kAgentRoot, 32);
+    auto legacy = RecorderListRecordings(kRecDir, 32);
+    entries.insert(entries.end(), legacy.begin(), legacy.end());
+    if (entries.size() > 32) {
+        entries.resize(32);
+    }
     menu_items.reserve(entries.size());
     for (const auto& entry : entries) {
         RecorderDisplayMenuItem item;
-        item.label = entry.name;
+        if (!entry.turn_id.empty()) {
+            item.label = entry.turn_id +
+                (entry.name == "assistant.wav" ? " / AI" : " / YOU");
+        } else {
+            item.label = entry.name;
+        }
         item.detail = RecorderFormatRecordingDetail(entry);
         item.path = entry.path;
         menu_items.push_back(item);
@@ -449,9 +510,11 @@ void RunRecorderApp() {
         // Recorder 的屏幕和 SD 卡共用 SPI2，日志 hook 会在任意 ESP_LOG 中写卡，
         // 容易与 LVGL 刷屏并发。录音模式优先保证录制/播放稳定，日志只走串口。
         mkdir(kRecDir, 0777);
+        mkdir(kAgentRoot, 0777);
     } else {
         ESP_LOGE(TAG, "SD 卡挂载失败，无法保存录音");
     }
+    AgentTurnStore turn_store(kAgentRoot);
 
     // 4. 音频 codec（读麦克风）
     BoxAudioCodec codec(s_i2c_bus, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
@@ -475,10 +538,28 @@ void RunRecorderApp() {
     if (!noise_reducer.valid()) {
         idle_subtitle = "NS FAILED";
     }
+    AgentVoiceState voice_state;
+    AgentPendingTurn active_turn;
+    bool has_active_turn = false;
+    if (sd_ok) {
+        const auto pending = turn_store.ListPending();
+        if (!pending.empty()) {
+            active_turn = pending.front();
+            has_active_turn = true;
+            voice_state.queued_turn = true;
+        }
+    }
     RecorderControlState control{RecorderControlMode::kIdle, codec.output_volume()};
-    RecorderShowText("REC 00:00", sd_ok ? idle_subtitle : "NO SD CARD");
+    control.voice_phase = voice_state.phase;
+    control.voice_turn_pending = voice_state.queued_turn;
+    RecorderShowText(has_active_turn ? "QUEUED" : "OFFLINE",
+                     sd_ok ? idle_subtitle : "NO SD CARD");
     RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
     RecorderDisplayResume();
+
+    RecorderNetwork network;
+    RecorderReconnectPolicy reconnect_policy;
+    network.Start();
 
     // 5. 实体键只发布事件；状态 reducer 决定当前是否接受。
     static Button left(KEY_LEFT_GPIO);
@@ -498,9 +579,127 @@ void RunRecorderApp() {
     bool recording_failed = false;
     bool exit_requested = false;
     int64_t last_disp_ms = 0;
-    char cur_path[64] = {0};
+    std::string cur_path;
+    AgentTurnPaths recording_paths;
+    uint64_t recording_created_at_ms = 0;
+    bool wifi_connected = false;
+    uint64_t reconnect_at_ms = 0;
+    uint32_t heartbeat_seconds = 25;
+    uint64_t next_ping_ms = RecorderMonotonicMs() + 10000;
+    AgentVoiceControl reply_control;
+    uint64_t reply_received_bytes = 0;
+    mbedtls_sha256_context reply_digest;
+    bool reply_digest_active = false;
+    std::string automatic_play_path;
+
+    auto sync_voice_control = [&]() {
+        control.voice_phase = voice_state.phase;
+        control.voice_turn_pending = voice_state.queued_turn;
+    };
+
+    auto show_voice_status = [&](const char* subtitle = nullptr) {
+        if (control.mode == RecorderControlMode::kIdle) {
+            const char* title = voice_state.queued_turn &&
+                    (voice_state.phase == AgentVoicePhase::kOffline ||
+                     voice_state.phase == AgentVoicePhase::kError)
+                ? "QUEUED"
+                : AgentVoicePhaseTitle(voice_state.phase);
+            RecorderShowText(title,
+                             subtitle != nullptr ? subtitle : idle_subtitle);
+        }
+    };
+
+    auto abort_reply = [&]() {
+        RecorderDisplayPause();
+        turn_store.AbortReply();
+        RecorderDisplayResume();
+        if (reply_digest_active) {
+            mbedtls_sha256_free(&reply_digest);
+            reply_digest_active = false;
+        }
+        reply_received_bytes = 0;
+        reply_control = {};
+    };
+
+    auto load_oldest_pending = [&]() {
+        RecorderDisplayPause();
+        const auto pending = turn_store.ListPending();
+        RecorderDisplayResume();
+        if (pending.empty()) {
+            active_turn = {};
+            has_active_turn = false;
+            voice_state.queued_turn = false;
+        } else {
+            active_turn = pending.front();
+            has_active_turn = true;
+            voice_state.queued_turn = true;
+        }
+        sync_voice_control();
+    };
+
+    auto send_turn_start = [&]() -> bool {
+        if (!has_active_turn || !network.IsSocketConnected()) {
+            return false;
+        }
+        const std::string frame = AgentVoiceBuildTurnStart(
+            active_turn.paths.turn_id,
+            active_turn.user_bytes,
+            active_turn.user_sha256);
+        if (frame.empty() || !network.SendText(frame)) {
+            return false;
+        }
+        RecorderDisplayPause();
+        const bool updated = turn_store.UpdateState(
+            active_turn.paths, AgentTurnStatus::kSending);
+        RecorderDisplayResume();
+        if (!updated) {
+            return false;
+        }
+        show_voice_status("upload pending");
+        ESP_LOGI(TAG, "Agent turn queued for upload: %s",
+                 active_turn.paths.turn_id.c_str());
+        return true;
+    };
+
+    auto upload_active_turn = [&](uint32_t chunk_bytes) -> bool {
+        if (!has_active_turn || chunk_bytes == 0 ||
+            chunk_bytes > kAgentVoiceMaxChunkBytes) {
+            return false;
+        }
+        RecorderDisplayPause();
+        FILE* upload = fopen(active_turn.paths.user_wav.c_str(), "rb");
+        RecorderDisplayResume();
+        if (upload == nullptr) {
+            return false;
+        }
+        std::vector<uint8_t> chunk(chunk_bytes);
+        uint64_t sent = 0;
+        bool ok = true;
+        while (sent < active_turn.user_bytes) {
+            const size_t wanted = static_cast<size_t>(std::min<uint64_t>(
+                chunk.size(), active_turn.user_bytes - sent));
+            RecorderDisplayPause();
+            const size_t size = fread(chunk.data(), 1, wanted, upload);
+            const bool read_failed = ferror(upload) != 0;
+            RecorderDisplayResume();
+            if (size != wanted || read_failed ||
+                !network.SendBinary(chunk.data(), size)) {
+                ok = false;
+                break;
+            }
+            sent += size;
+        }
+        RecorderDisplayPause();
+        fclose(upload);
+        RecorderDisplayResume();
+        if (!ok || sent != active_turn.user_bytes) {
+            return false;
+        }
+        return network.SendText(AgentVoiceBuildTurnEnd(active_turn.paths.turn_id));
+    };
 
     auto process_requests = [&](bool* open_menu, std::string* play_path) {
+        sync_voice_control();
         RecorderRequest request;
         while (TakeRequest(&request)) {
             RecorderControlAction action =
@@ -515,23 +714,267 @@ void RunRecorderApp() {
         }
     };
 
+    auto schedule_reconnect = [&](AgentVoiceEvent event) {
+        abort_reply();
+        AgentVoiceReduce(&voice_state, event);
+        sync_voice_control();
+        if (wifi_connected) {
+            reconnect_at_ms = RecorderMonotonicMs() + reconnect_policy.NextDelayMs();
+        } else {
+            reconnect_at_ms = 0;
+        }
+        show_voice_status(event == AgentVoiceEvent::kFailure
+                              ? "retrying connection"
+                              : "waiting for network");
+    };
+
+    auto fail_connection = [&](const char* reason) {
+        ESP_LOGE(TAG, "Agent voice transfer failed: %s", reason);
+        network.CloseSocket();
+        schedule_reconnect(AgentVoiceEvent::kFailure);
+    };
+
     while (true) {
+        const uint64_t now_ms = RecorderMonotonicMs();
+        if (wifi_connected && reconnect_at_ms != 0 &&
+            now_ms >= reconnect_at_ms) {
+            reconnect_at_ms = 0;
+            AgentVoiceReduce(&voice_state, AgentVoiceEvent::kWifiConnected);
+            sync_voice_control();
+            show_voice_status("connecting");
+            if (!network.ConnectSocket()) {
+                schedule_reconnect(AgentVoiceEvent::kFailure);
+            }
+        }
+        if (network.IsSocketConnected() && now_ms >= next_ping_ms) {
+            if (!network.SendText(AgentVoiceBuildPing())) {
+                fail_connection("heartbeat send failed");
+            }
+            next_ping_ms = now_ms +
+                std::max<uint64_t>(5000, static_cast<uint64_t>(heartbeat_seconds) * 500ULL);
+        }
+
+        RecorderNetworkEvent network_event;
+        while (network.Poll(&network_event)) {
+            if (network_event.type == RecorderNetworkEventType::kWifiConnected) {
+                wifi_connected = true;
+                reconnect_policy.Reset();
+                reconnect_at_ms = 0;
+                AgentVoiceReduce(&voice_state, AgentVoiceEvent::kWifiConnected);
+                sync_voice_control();
+                show_voice_status("connecting");
+                if (!network.ConnectSocket()) {
+                    schedule_reconnect(AgentVoiceEvent::kFailure);
+                }
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kWifiDisconnected) {
+                wifi_connected = false;
+                reconnect_at_ms = 0;
+                schedule_reconnect(AgentVoiceEvent::kDisconnected);
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kSocketConnected) {
+                next_ping_ms = RecorderMonotonicMs() + 10000;
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kSocketDisconnected) {
+                schedule_reconnect(AgentVoiceEvent::kDisconnected);
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kNeedsWifiProvisioning) {
+                RecorderShowText("WIFI SETUP", "configure in XiaoZhi mode");
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kNeedsAgentProvisioning) {
+                RecorderShowText("AGENT SETUP", "device token missing");
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kError) {
+                schedule_reconnect(AgentVoiceEvent::kFailure);
+                continue;
+            }
+            if (network_event.type == RecorderNetworkEventType::kBinary) {
+                if (!has_active_turn || !reply_digest_active ||
+                    voice_state.phase != AgentVoicePhase::kReceiving ||
+                    network_event.data.empty()) {
+                    fail_connection("unexpected reply audio");
+                    continue;
+                }
+                RecorderDisplayPause();
+                const bool stored = turn_store.AppendReply(
+                    network_event.data.data(), network_event.data.size());
+                RecorderDisplayResume();
+                if (!stored || mbedtls_sha256_update(
+                        &reply_digest,
+                        network_event.data.data(),
+                        network_event.data.size()) != 0) {
+                    fail_connection("reply chunk could not be stored");
+                    continue;
+                }
+                reply_received_bytes += network_event.data.size();
+                const std::string acknowledgement = AgentVoiceBuildReplyChunkSaved(
+                    active_turn.paths.turn_id, reply_received_bytes);
+                if (acknowledgement.empty() || !network.SendText(acknowledgement)) {
+                    fail_connection("reply chunk acknowledgement failed");
+                }
+                continue;
+            }
+            if (network_event.type != RecorderNetworkEventType::kText) {
+                continue;
+            }
+
+            AgentVoiceControl frame;
+            const std::string expected_turn = has_active_turn
+                ? active_turn.paths.turn_id : std::string();
+            if (!AgentVoiceParseControl(
+                    network_event.text(), expected_turn, &frame)) {
+                fail_connection("invalid server control frame");
+                continue;
+            }
+            switch (frame.type) {
+                case AgentVoiceControlType::kReady: {
+                    heartbeat_seconds = frame.heartbeat_seconds;
+                    reconnect_policy.Reset();
+                    const AgentVoiceAction action = AgentVoiceReduce(
+                        &voice_state, AgentVoiceEvent::kServerReady);
+                    sync_voice_control();
+                    show_voice_status(has_active_turn ? "queued turn" : idle_subtitle);
+                    if (action == AgentVoiceAction::kSendQueuedTurn &&
+                        !send_turn_start()) {
+                        fail_connection("turn start send failed");
+                    }
+                    break;
+                }
+                case AgentVoiceControlType::kTurnReady:
+                    if (!upload_active_turn(frame.chunk_bytes)) {
+                        fail_connection("WAV upload failed");
+                    }
+                    break;
+                case AgentVoiceControlType::kTurnAccepted: {
+                    RecorderDisplayPause();
+                    const bool updated = turn_store.UpdateState(
+                        active_turn.paths, AgentTurnStatus::kProcessing);
+                    RecorderDisplayResume();
+                    if (!updated) {
+                        fail_connection("turn state could not be stored");
+                        break;
+                    }
+                    AgentVoiceReduce(&voice_state, AgentVoiceEvent::kTurnAccepted);
+                    sync_voice_control();
+                    show_voice_status("Agent is thinking");
+                    ESP_LOGI(TAG, "Agent accepted turn: %s",
+                             active_turn.paths.turn_id.c_str());
+                    break;
+                }
+                case AgentVoiceControlType::kReplyStart: {
+                    abort_reply();
+                    RecorderDisplayPause();
+                    const bool began = turn_store.BeginReply(
+                        active_turn.paths, frame.bytes, frame.sha256);
+                    RecorderDisplayResume();
+                    if (!began) {
+                        fail_connection("reply file could not be created");
+                        break;
+                    }
+                    mbedtls_sha256_init(&reply_digest);
+                    if (mbedtls_sha256_starts(&reply_digest, 0) != 0) {
+                        mbedtls_sha256_free(&reply_digest);
+                        fail_connection("reply hash could not start");
+                        break;
+                    }
+                    reply_digest_active = true;
+                    reply_received_bytes = 0;
+                    reply_control = frame;
+                    AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStarted);
+                    sync_voice_control();
+                    show_voice_status("saving reply to SD");
+                    break;
+                }
+                case AgentVoiceControlType::kReplyEnd: {
+                    if (!reply_digest_active ||
+                        reply_received_bytes != reply_control.bytes) {
+                        fail_connection("reply ended before all bytes arrived");
+                        break;
+                    }
+                    unsigned char digest[32];
+                    const bool hash_ok =
+                        mbedtls_sha256_finish(&reply_digest, digest) == 0;
+                    mbedtls_sha256_free(&reply_digest);
+                    reply_digest_active = false;
+                    const std::string actual_sha256 = hash_ok
+                        ? DigestHex(digest) : std::string();
+                    RecorderDisplayPause();
+                    const bool committed = hash_ok && turn_store.CommitReply(
+                        reply_control.transcript,
+                        reply_control.reply_text,
+                        reply_received_bytes,
+                        actual_sha256,
+                        reply_control.server_time);
+                    RecorderDisplayResume();
+                    if (!committed) {
+                        fail_connection("reply integrity check failed");
+                        break;
+                    }
+                    if (!network.SendText(AgentVoiceBuildReplySaved(
+                            active_turn.paths.turn_id))) {
+                        fail_connection("reply saved acknowledgement failed");
+                        break;
+                    }
+                    AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStored);
+                    sync_voice_control();
+                    if (RecorderControlReduce(
+                            &control, RecorderControlEvent::kAgentReplyReady) ==
+                        RecorderControlAction::kStartAgentReplyPlayback) {
+                        automatic_play_path = active_turn.paths.assistant_wav;
+                    }
+                    ESP_LOGI(TAG, "Agent reply stored: %s",
+                             active_turn.paths.assistant_wav.c_str());
+                    break;
+                }
+                case AgentVoiceControlType::kError:
+                    fail_connection(frame.retryable
+                                        ? "server requested retry"
+                                        : "server rejected turn");
+                    break;
+                case AgentVoiceControlType::kPong:
+                    break;
+                default:
+                    fail_connection("unexpected server state");
+                    break;
+            }
+        }
+
         bool open_menu = false;
         std::string play_path;
         process_requests(&open_menu, &play_path);
 
         if (exit_requested) {
             // 退出前若正在录音，先把当前文件收尾保存，避免丢数据
+            network.Stop();
             RecorderDisplayPause();
+            abort_reply();
             if (f != nullptr) {
                 const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
                                       !recording_failed;
                 if (!saved_ok) {
-                    ESP_LOGE(TAG, "退出时录音保存失败: %s", cur_path);
+                    ESP_LOGE(TAG, "退出时录音保存失败: %s", cur_path.c_str());
                     RecorderShowText("SAVE FAILED", "write error");
                 }
                 fclose(f);
                 f = nullptr;
+                if (saved_ok) {
+                    uint64_t wav_bytes = 0;
+                    std::string wav_sha256;
+                    if (!HashSdFile(cur_path, &wav_bytes, &wav_sha256) ||
+                        !turn_store.MarkRecorded(
+                            recording_paths,
+                            wav_bytes,
+                            wav_sha256,
+                            recording_created_at_ms)) {
+                        ESP_LOGE(TAG, "退出时录音清单保存失败: %s", cur_path.c_str());
+                    }
+                }
             }
             RecorderShowText("EXIT", "back to menu");
             RecorderDisplayResume();
@@ -546,12 +989,33 @@ void RunRecorderApp() {
             RecorderDisplayResume();
         }
 
+        bool playing_agent_reply = false;
+        if (play_path.empty() && !automatic_play_path.empty()) {
+            play_path = std::move(automatic_play_path);
+            automatic_play_path.clear();
+            playing_agent_reply = true;
+            AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackStarted);
+            sync_voice_control();
+        }
         if (!play_path.empty() &&
             control.mode == RecorderControlMode::kPlaying && f == nullptr) {
             RecorderDisplayPause();
             const PlaybackResult result =
                 PlayWavFile(codec, play_path.c_str(), &control, &exit_requested);
             RecorderControlReduce(&control, RecorderControlEvent::kPlaybackFinished);
+            if (playing_agent_reply) {
+                AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackFinished);
+                load_oldest_pending();
+                if (has_active_turn && network.IsSocketConnected()) {
+                    const AgentVoiceAction action = AgentVoiceReduce(
+                        &voice_state, AgentVoiceEvent::kTurnQueued);
+                    sync_voice_control();
+                    if (action == AgentVoiceAction::kSendQueuedTurn &&
+                        !send_turn_start()) {
+                        fail_connection("next queued turn could not start");
+                    }
+                }
+            }
             RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
             if (!exit_requested) {
                 if (result == PlaybackResult::kDone) {
@@ -559,6 +1023,9 @@ void RunRecorderApp() {
                 } else if (result == PlaybackResult::kFailed) {
                     RecorderShowText("PLAY FAILED", "check wav");
                 }
+            }
+            if (playing_agent_reply && !exit_requested) {
+                show_voice_status(has_active_turn ? "next turn queued" : idle_subtitle);
             }
             RecorderDisplayResume();
             continue;
@@ -591,11 +1058,12 @@ void RunRecorderApp() {
             RecorderShowText("REC 00:00",
                              noise_reducer.noise_reduction_enabled() ? "recording" : "NS OFF");
             FlushDisplayThenPause();
-            int idx = NextRecIndex();
-            snprintf(cur_path, sizeof(cur_path), "%s/rec%d.wav", kRecDir, idx);
-            f = fopen(cur_path, "wb");
+            recording_created_at_ms = RecorderNowMs();
+            recording_paths = turn_store.Create(RecorderDate(), NewTurnId());
+            cur_path = recording_paths.user_wav;
+            f = recording_paths.valid() ? fopen(cur_path.c_str(), "wb") : nullptr;
             if (f == nullptr) {
-                ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path);
+                ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path.c_str());
                 RecorderShowText("SAVE FAILED", "write error");
                 control.mode = RecorderControlMode::kIdle;
                 RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
@@ -607,7 +1075,7 @@ void RunRecorderApp() {
             data_bytes = 0;
             recording_failed = false;
             last_disp_ms = 0;
-            ESP_LOGI(TAG, "开始录音 -> %s", cur_path);
+            ESP_LOGI(TAG, "开始录音 -> %s", cur_path.c_str());
             RecorderDisplayResume();
         }
 
@@ -616,14 +1084,25 @@ void RunRecorderApp() {
             if (codec.InputData(buf)) {
                 std::vector<int16_t> processed;
                 bool block_ok = noise_reducer.Process(buf, &processed);
+                bool reached_voice_limit = false;
+                if (block_ok) {
+                    const size_t allowed_samples = AgentVoiceClampPcmSamples(
+                        data_bytes, processed.size());
+                    reached_voice_limit = allowed_samples < processed.size();
+                    processed.resize(allowed_samples);
+                }
                 RecorderDisplayPause();
                 if (block_ok) {
                     block_ok = AppendPcm(f, processed, &data_bytes);
                 }
                 if (!block_ok) {
-                    ESP_LOGE(TAG, "录音 DSP/写入失败: %s", cur_path);
+                    ESP_LOGE(TAG, "录音 DSP/写入失败: %s", cur_path.c_str());
                     control.mode = RecorderControlMode::kIdle;
                     recording_failed = true;
+                } else if (reached_voice_limit) {
+                    ESP_LOGI(TAG, "录音达到 Agent 4 MiB 上限，自动停止");
+                    control.mode = RecorderControlMode::kIdle;
+                    RecorderShowText("MAX LENGTH", "saving recording");
                 }
 
                 // 每约 1 秒刷新一次计时显示
@@ -655,18 +1134,42 @@ void RunRecorderApp() {
             uint32_t secs = data_bytes /
                 (noise_reducer.output_sample_rate() * sizeof(int16_t));
             if (!saved_ok) {
-                ESP_LOGE(TAG, "录音保存失败: %s", cur_path);
+                ESP_LOGE(TAG, "录音保存失败: %s", cur_path.c_str());
                 RecorderShowText("SAVE FAILED", "write error");
                 RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
                 RecorderDisplayResume();
                 continue;
             }
-            ESP_LOGI(TAG, "已保存 %s (%u 秒, %u 字节)", cur_path, (unsigned)secs, (unsigned)data_bytes);
+            uint64_t wav_bytes = 0;
+            std::string wav_sha256;
+            const bool indexed = HashSdFile(cur_path, &wav_bytes, &wav_sha256) &&
+                turn_store.MarkRecorded(
+                    recording_paths,
+                    wav_bytes,
+                    wav_sha256,
+                    recording_created_at_ms);
+            if (!indexed) {
+                ESP_LOGE(TAG, "录音清单保存失败: %s", cur_path.c_str());
+                RecorderShowText("SAVE FAILED", "manifest/hash error");
+                RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
+                RecorderDisplayResume();
+                continue;
+            }
+            ESP_LOGI(TAG, "已保存 %s (%u 秒, %llu 字节)",
+                     cur_path.c_str(),
+                     static_cast<unsigned>(secs),
+                     static_cast<unsigned long long>(wav_bytes));
             char saved[48];
             snprintf(saved, sizeof(saved), "SAVED %02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
-            RecorderShowText(saved, "sending");
-            DumpWavOverSerial(cur_path);  // 串口回传，便于电脑端免拔卡分析
-            RecorderShowText(saved, idle_subtitle);
+            load_oldest_pending();
+            const AgentVoiceAction action = AgentVoiceReduce(
+                &voice_state, AgentVoiceEvent::kTurnQueued);
+            sync_voice_control();
+            RecorderShowText(saved, network.IsSocketConnected() ? "sending" : "queued offline");
+            if (action == AgentVoiceAction::kSendQueuedTurn &&
+                !send_turn_start()) {
+                fail_connection("recorded turn could not start");
+            }
             RecorderDisplaySetState(RecorderDisplayState::kIdle, control.volume);
             RecorderDisplayResume();
         }

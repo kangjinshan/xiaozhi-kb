@@ -1,5 +1,6 @@
 #include "agent_turn_store.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cctype>
 #include <cstdlib>
@@ -285,6 +286,7 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
                 record.status == AgentTurnStatus::kComplete) {
                 continue;
             }
+            unlink((paths.assistant_wav + ".part").c_str());
             pending.push_back({
                 paths,
                 record.status,
@@ -296,6 +298,16 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
         closedir(date_directory);
     }
     closedir(root);
+    std::sort(pending.begin(), pending.end(),
+              [](const AgentPendingTurn& left, const AgentPendingTurn& right) {
+                  if (left.created_at_ms != right.created_at_ms) {
+                      return left.created_at_ms < right.created_at_ms;
+                  }
+                  if (left.paths.date != right.paths.date) {
+                      return left.paths.date < right.paths.date;
+                  }
+                  return left.paths.turn_id < right.paths.turn_id;
+              });
     return pending;
 }
 

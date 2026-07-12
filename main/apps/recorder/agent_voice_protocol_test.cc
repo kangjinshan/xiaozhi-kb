@@ -4,6 +4,11 @@
 #include <string>
 
 int main() {
+    assert(AgentVoiceClampPcmSamples(0, 1024) == 1024);
+    constexpr uint64_t kReservedDataLimit = 4194304ULL - 44ULL - 640ULL;
+    assert(AgentVoiceClampPcmSamples(kReservedDataLimit - 2, 100) == 1);
+    assert(AgentVoiceClampPcmSamples(kReservedDataLimit, 1) == 0);
+
     const std::string hash(64, 'a');
     const std::string turn_start = AgentVoiceBuildTurnStart("turn-1", 1024, hash);
     assert(turn_start.find("\"type\":\"turn_start\"") != std::string::npos);

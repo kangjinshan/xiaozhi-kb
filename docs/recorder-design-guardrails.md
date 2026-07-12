@@ -82,6 +82,13 @@ Current guard implementation:
 
 ## 3. Verification Required for Recorder Changes
 
+Agent voice additions keep the same SPI2 ownership rule:
+
+- WebSocket/Wi-Fi callbacks only copy bounded events; they never access FATFS, LVGL or the codec.
+- The recorder main task pauses LVGL around each SD read/write, then acknowledges a reply chunk only after its bytes are on the card.
+- `assistant.wav.part` is never listed or played. Startup pending scans remove stale parts and request an idempotent replay.
+- Recorder input reserves DSP flush capacity below the 4 MiB protocol maximum and auto-stops at the limit.
+
 Before calling recorder work complete, run:
 
 ```bash
@@ -116,6 +123,31 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/recorder/recorder_file_list.cc \
   main/apps/recorder/recorder_wav_file.cc \
   -o /tmp/recorder_playback_menu_test && /tmp/recorder_playback_menu_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/agent_voice_state_test.cc \
+  main/apps/recorder/agent_voice_state.cc \
+  -o /tmp/agent_voice_state_test && /tmp/agent_voice_state_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/agent_turn_store_test.cc \
+  main/apps/recorder/agent_turn_store.cc \
+  -o /tmp/agent_turn_store_test && /tmp/agent_turn_store_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/agent_voice_protocol_test.cc \
+  main/apps/recorder/agent_voice_protocol.cc \
+  -o /tmp/agent_voice_protocol_test && /tmp/agent_voice_protocol_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_network_events_test.cc \
+  main/apps/recorder/recorder_network.cc \
+  -DRECORDER_NETWORK_HOST_TEST \
+  -o /tmp/recorder_network_events_test && /tmp/recorder_network_events_test
 
 source ~/esp/esp-idf/export.sh
 idf.py build
