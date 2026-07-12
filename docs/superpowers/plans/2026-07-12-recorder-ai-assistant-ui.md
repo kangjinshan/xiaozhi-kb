@@ -496,7 +496,7 @@ git add -f docs/superpowers/plans/2026-07-12-recorder-ai-assistant-ui.md
 git commit -m "docs(recorder): document AI assistant interaction"
 ```
 
-- [ ] **Step 5: Flash and inspect the real device**
+- [x] **Step 5: Flash and inspect the real device**
 
 Run:
 
@@ -509,7 +509,11 @@ Use safe serial listening (`dtr=True`, `rts=False`) and visual inspection. Confi
 the `金山 AI` identity, single-button states, history labels, and absence of SPI,
 stack, reset, hash, or queue failures.
 
-- [ ] **Step 6: Complete one physical voice turn**
+Verified on 2026-07-12 with the formal main image: common Chinese font loaded,
+Wi-Fi/WSS reached ready, the history menu opened at the newest rows, and the
+safe serial window contained none of the listed fatal markers.
+
+- [x] **Step 6: Complete one physical voice turn**
 
 On the device, tap `点击说话`, speak a weather question, tap `发送`, and observe
 the state sequence through `Speaking`. Run:
@@ -519,6 +523,7 @@ the state sequence through `Speaking`. Run:
   --port-glob /dev/cu.usbmodem1101 --duration 30
 ```
 
-Expected: `PASS: Agent voice reply was stored and playback started` and no fatal
-marker. This final physical tap remains an external acceptance action; all software,
-build, flash, and safe-listening work proceeds autonomously.
+Verified by the autonomous physical acceptance path on 2026-07-12: a weather
+turn stored both WAV files, reached Agent `complete`, auto-played the reply,
+showed the current `AI 回复` / `你` pair at history rows 0/1, and replayed the
+same assistant WAV without a fatal marker.

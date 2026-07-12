@@ -232,10 +232,11 @@ Expected: ESP32-C6 build succeeds, generated assets still contain
 `font_puhui_common_30_4.bin`, application and assets images fit their partitions,
 and the expected noise-suppression symbol remains linked.
 
-- [ ] **Step 4: Flash and run safe serial verification**
+- [x] **Step 4: Flash and run safe serial verification**
 
-Flash and startup verification passed. Physical history-row rendering and WAV
-selection remain for final device acceptance.
+Flash, startup, physical history rendering, and WAV selection passed. The
+current assistant reply rendered as a 201 px content-height wrapped row, the
+menu opened at `scroll_y=0`, and selecting it replayed the same stored WAV.
 
 ```bash
 idf.py -p /dev/cu.usbmodem1101 flash
