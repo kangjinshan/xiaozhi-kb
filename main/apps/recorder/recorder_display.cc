@@ -1,7 +1,10 @@
 #include "recorder_display.h"
 
+#include "assets.h"
 #include "config.h"
 #include "esp_lcd_sh8601.h"
+#include "lvgl_font.h"
+#include "recorder_common_font.h"
 #include "recorder_control_state.h"
 #include "recorder_display_area.h"
 
@@ -17,6 +20,7 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -59,6 +63,57 @@ void* s_callback_user_data = nullptr;
 uint32_t s_menu_pressed_tick = 0;
 bool s_menu_hold_fired = false;
 std::vector<std::string> s_file_paths;
+std::unique_ptr<LvglCBinFont> s_common_font_owner;
+const lv_font_t* s_history_detail_font = &font_puhui_basic_20_4;
+
+bool GetCommonFontAsset(const char* name,
+                        void** data,
+                        size_t* size,
+                        void* user_data) {
+    auto* assets = static_cast<Assets*>(user_data);
+    return assets != nullptr && name != nullptr && data != nullptr &&
+           size != nullptr && assets->GetAssetData(name, *data, *size);
+}
+
+const void* DecodeCommonFont(void* data, void*) {
+    auto candidate = std::make_unique<LvglCBinFont>(data);
+    if (candidate->font() == nullptr) {
+        return nullptr;
+    }
+    const lv_font_t* font = candidate->font();
+    s_common_font_owner = std::move(candidate);
+    return font;
+}
+
+void InitializeHistoryDetailFont() {
+    s_history_detail_font = &font_puhui_basic_20_4;
+    auto& assets = Assets::GetInstance();
+    const RecorderCommonFontResult result = RecorderLoadCommonFont(
+        assets.partition_valid(), GetCommonFontAsset, &assets,
+        DecodeCommonFont, nullptr);
+    if (result.loaded()) {
+        s_history_detail_font = static_cast<const lv_font_t*>(result.font);
+        ESP_LOGI(TAG, "history common font loaded: %u bytes",
+                 static_cast<unsigned>(result.asset_bytes));
+        return;
+    }
+
+    const char* reason = "decode failed";
+    switch (result.status) {
+        case RecorderCommonFontStatus::kPartitionUnavailable:
+            reason = "assets partition unavailable";
+            break;
+        case RecorderCommonFontStatus::kAssetMissing:
+            reason = "font asset missing";
+            break;
+        case RecorderCommonFontStatus::kDecodeFailed:
+            break;
+        case RecorderCommonFontStatus::kLoaded:
+            reason = "invalid loaded font";
+            break;
+    }
+    ESP_LOGW(TAG, "history common font fallback: %s", reason);
+}
 
 void OnInvalidateArea(lv_event_t* event) {
     auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
@@ -383,6 +438,7 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "touch init failed: %s", esp_err_to_name(err));
     }
+    InitializeHistoryDetailFont();
 
     // 建好固定控件，后续只更新文字或列表，避免反复 clean/create。
     if (lvgl_port_lock(30000)) {
@@ -705,7 +761,12 @@ void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& ite
             lv_obj_set_width(detail, LV_PCT(100));
             lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_color(detail, lv_color_hex(0xA9B1BD), 0);
-            lv_obj_set_style_text_font(detail, &font_puhui_basic_20_4, 0);
+            lv_obj_set_style_text_font(
+                detail,
+                items[i].conversation_detail
+                    ? s_history_detail_font
+                    : &font_puhui_basic_20_4,
+                0);
         }
     }
 

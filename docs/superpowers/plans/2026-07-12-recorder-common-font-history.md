@@ -122,7 +122,7 @@ git commit -m "feat(recorder): show persisted conversation text"
 - Modify: `main/apps/recorder/recorder_app.cc`
 - Modify: `main/CMakeLists.txt`
 
-- [ ] **Step 1: Write the failing loader test**
+- [x] **Step 1: Write the failing loader test**
 
 Define fake asset and decoder callbacks, then assert that
 `RecorderLoadCommonFont()`:
@@ -144,7 +144,7 @@ Check(RecorderLoadCommonFont(true, get, nullptr, decode, nullptr).loaded(),
       "valid mmap font is selected");
 ```
 
-- [ ] **Step 2: Run the loader test and verify RED**
+- [x] **Step 2: Run the loader test and verify RED**
 
 ```bash
 c++ -std=c++17 -Wall -Wextra -Werror \
@@ -156,7 +156,7 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 
 Expected: compilation fails because the loader contract does not exist.
 
-- [ ] **Step 3: Implement the platform-neutral loader**
+- [x] **Step 3: Implement the platform-neutral loader**
 
 Expose function-pointer types for `GetAssetData` and decode, an enum with
 `kLoaded`, `kPartitionUnavailable`, `kAssetMissing`, and `kDecodeFailed`, and a
@@ -164,12 +164,12 @@ result carrying `const void* font` plus asset byte size. It must invoke callback
 only when prerequisites succeeded and request exactly
 `font_puhui_common_30_4.bin`.
 
-- [ ] **Step 4: Run the loader test and verify GREEN**
+- [x] **Step 4: Run the loader test and verify GREEN**
 
 Run the Step 2 command and `/tmp/recorder_common_font_test`.
 Expected: `recorder_common_font_test passed`.
 
-- [ ] **Step 5: Adapt the loader to Assets/LVGL**
+- [x] **Step 5: Adapt the loader to Assets/LVGL**
 
 In `recorder_display.cc`, after `lv_init()` and before building the widget tree:
 
@@ -190,7 +190,7 @@ Add `bool conversation_detail` to `RecorderDisplayMenuItem`, set it from
 font only for those details. Existing size details and every fixed label retain
 their current fonts.
 
-- [ ] **Step 6: Add firmware sources and commit**
+- [x] **Step 6: Add firmware sources and commit**
 
 Append `agent_turn_manifest.cc` and `recorder_common_font.cc` to the recorder
 source list in `main/CMakeLists.txt`, then commit:

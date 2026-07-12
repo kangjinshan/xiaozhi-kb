@@ -14,6 +14,7 @@ struct RecorderDisplayMenuItem {
     std::string label;
     std::string detail;
     std::string path;
+    bool conversation_detail = false;
 };
 
 using RecorderDisplayCallback = void (*)(void* user_data);

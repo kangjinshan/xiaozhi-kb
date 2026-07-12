@@ -361,6 +361,7 @@ void ShowPlaybackMenu() {
         item.label = RecorderConversationLabel(entry);
         item.detail = RecorderFormatRecordingDetail(entry);
         item.path = entry.path;
+        item.conversation_detail = !entry.conversation_text.empty();
         menu_items.push_back(item);
     }
     RecorderDisplayShowFileMenu(menu_items);
