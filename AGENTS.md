@@ -44,6 +44,10 @@
   - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
   - 核心逻辑：`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
   - 副作用：读写 `/sdcard/rec/recN.wav`，停止后可经串口回传 base64 WAV。
+- **Agent 语音助手传输**
+  - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
+  - 核心逻辑：持久 WSS、4096 字节有界传输、turn 幂等状态和 SD 原子文件
+  - 副作用：将用户与助手 WAV/清单写入 `/sdcard/agent/`；回复块落卡后才发送累计字节 ACK。
 - **AMOLED 与 SD 卡共享 SPI2**
   - 入口：目标板构造函数和 `RecorderDisplayPause()` / `RecorderDisplayResume()`
   - 核心逻辑：SD 初始化或大块 I/O 前停止 LVGL 并取得 LVGL 锁
@@ -63,6 +67,7 @@
 - 不要用不受控的 DTR/RTS 序列做运行态验证。安全监听状态为 `dtr=True, rts=False`；异常时做拔 USB、拔电池、等待 20 秒后的物理冷启动。
 - 修改 NVS、OTA 或分区后，至少验证冷启动、软重启和三种应用切换。不要覆盖用户的全盘备份或无理由擦除 NVS。
 - 录音改动必须执行 `docs/recorder-design-guardrails.md` 中列出的主机测试，并运行 `idf.py build`。
+- Agent 回复禁止在网络回调中直接写 SD；主任务每成功落卡一个块后发送 `reply_chunk_saved`，服务端收到精确累计字节 ACK 才能继续发送。`assistant.wav.part` 永远不可播放。
 
 ### 已确认故障（2026-07-11）
 

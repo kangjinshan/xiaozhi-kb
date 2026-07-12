@@ -89,6 +89,11 @@ int main() {
     assert(pending[0].paths.turn_id == "turn-2");
     assert(access(pending[0].paths.user_wav.c_str(), F_OK) == 0);
 
+    AgentTurnPaths missing_manifest = store.Create("20260712", "turn-3");
+    assert(missing_manifest.valid());
+    assert(!store.BeginReply(missing_manifest, reply_wav.size(), reply_hash));
+    assert(access((missing_manifest.assistant_wav + ".part").c_str(), F_OK) != 0);
+
     AgentTurnPaths unsafe = store.Create("20260712", "../escape");
     assert(!unsafe.valid());
     return 0;

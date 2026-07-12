@@ -315,7 +315,11 @@ bool AgentTurnStore::BeginReply(const AgentTurnPaths& paths,
     expected_reply_bytes_ = expected_bytes;
     received_reply_bytes_ = 0;
     expected_reply_sha256_ = expected_sha256;
-    return UpdateState(paths, AgentTurnStatus::kReceiving);
+    if (!UpdateState(paths, AgentTurnStatus::kReceiving)) {
+        AbortReply();
+        return false;
+    }
+    return true;
 }
 
 bool AgentTurnStore::AppendReply(const uint8_t* data, size_t size) {

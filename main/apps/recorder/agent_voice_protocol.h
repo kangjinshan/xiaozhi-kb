@@ -38,6 +38,8 @@ std::string AgentVoiceBuildTurnStart(const std::string& turn_id,
                                      uint64_t bytes,
                                      const std::string& sha256);
 std::string AgentVoiceBuildTurnEnd(const std::string& turn_id);
+std::string AgentVoiceBuildReplyChunkSaved(const std::string& turn_id,
+                                           uint64_t saved_bytes);
 std::string AgentVoiceBuildReplySaved(const std::string& turn_id);
 std::string AgentVoiceBuildPing();
 

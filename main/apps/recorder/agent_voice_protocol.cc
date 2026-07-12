@@ -128,6 +128,18 @@ std::string AgentVoiceBuildTurnEnd(const std::string& turn_id) {
     return "{\"type\":\"turn_end\",\"turn_id\":\"" + turn_id + "\"}";
 }
 
+std::string AgentVoiceBuildReplyChunkSaved(const std::string& turn_id,
+                                           uint64_t saved_bytes) {
+    if (!AgentVoiceSafeTurnId(turn_id) || saved_bytes == 0 ||
+        saved_bytes > kAgentVoiceMaxBytes) {
+        return {};
+    }
+    std::ostringstream json;
+    json << "{\"type\":\"reply_chunk_saved\",\"turn_id\":\"" << turn_id
+         << "\",\"bytes\":" << saved_bytes << "}";
+    return json.str();
+}
+
 std::string AgentVoiceBuildReplySaved(const std::string& turn_id) {
     if (!AgentVoiceSafeTurnId(turn_id)) {
         return {};
@@ -190,10 +202,11 @@ bool AgentVoiceParseControl(const std::string& json,
             !ExtractUint64(json, "sample_rate", &sample_rate) || sample_rate != 16000 ||
             !ExtractUint64(json, "channels", &channels) || channels != 1 ||
             !ExtractString(json, "transcript", &parsed.transcript) ||
-            !ExtractString(json, "reply_text", &parsed.reply_text)) {
+            !ExtractString(json, "reply_text", &parsed.reply_text) ||
+            !ExtractString(json, "server_time", &parsed.server_time) ||
+            parsed.server_time.empty()) {
             return false;
         }
-        ExtractString(json, "server_time", &parsed.server_time);
         parsed.type = AgentVoiceControlType::kReplyStart;
     } else if (type == "reply_end") {
         if (!ParseTurnId(json, expected_turn_id, &parsed.turn_id)) {

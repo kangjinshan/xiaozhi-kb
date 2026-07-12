@@ -47,6 +47,14 @@ int main() {
     assert(control.sha256 == std::string(64, 'b'));
     assert(control.transcript == "你好");
     assert(control.reply_text == "你好呀");
+    assert(control.server_time == "2026-07-12T10:00:00+08:00");
+
+    const std::string reply_without_server_time =
+        std::string("{\"type\":\"reply_start\",\"turn_id\":\"turn-1\",") +
+        "\"bytes\":2048,\"sha256\":\"" + std::string(64, 'b') +
+        "\",\"audio_format\":\"wav-pcm-s16le\",\"sample_rate\":16000," +
+        "\"channels\":1,\"transcript\":\"\",\"reply_text\":\"\"}";
+    assert(!AgentVoiceParseControl(reply_without_server_time, "turn-1", &control));
 
     const std::string oversize =
         std::string("{\"type\":\"reply_start\",\"turn_id\":\"turn-1\",") +
@@ -66,6 +74,10 @@ int main() {
            R"({"type":"turn_end","turn_id":"turn-1"})");
     assert(AgentVoiceBuildReplySaved("turn-1") ==
            R"({"type":"reply_saved","turn_id":"turn-1"})");
+    assert(AgentVoiceBuildReplyChunkSaved("turn-1", 4096) ==
+           R"({"type":"reply_chunk_saved","turn_id":"turn-1","bytes":4096})");
+    assert(AgentVoiceBuildReplyChunkSaved("../escape", 4096).empty());
+    assert(AgentVoiceBuildReplyChunkSaved("turn-1", 0).empty());
     assert(AgentVoiceBuildPing() == R"({"type":"ping"})");
     return 0;
 }
