@@ -67,6 +67,10 @@
 - 不要用不受控的 DTR/RTS 序列做运行态验证。安全监听状态为 `dtr=True, rts=False`；异常时做拔 USB、拔电池、等待 20 秒后的物理冷启动。
 - 修改 NVS、OTA 或分区后，至少验证冷启动、软重启和三种应用切换。不要覆盖用户的全盘备份或无理由擦除 NVS。
 - 录音改动必须执行 `docs/recorder-design-guardrails.md` 中列出的主机测试，并运行 `idf.py build`。
+- ESP-IDF FATFS 的 `rename()` 不能覆盖已存在目标。Agent turn 的 `turn.json` 和
+  `assistant.wav` 必须通过 `.part` + 可恢复 `.bak` 交换发布；启动扫描要能从
+  `turn.json.bak` 恢复，`.part` / `.bak` 永远不能播放。主机回归必须运行模拟
+  `FR_EXIST` 的 `agent_turn_store_fatfs_test.cc`，不能只依赖 macOS 的 POSIX rename。
 - Agent 回复禁止在网络回调中直接写 SD；主任务每成功落卡一个块后发送 `reply_chunk_saved`，服务端收到精确累计字节 ACK 才能继续发送。`assistant.wav.part` 永远不可播放。
 - 单个上传 WAV 上限为 4 MiB；录音链路必须预留 DSP flush 空间并自动停止，不能生成永久无法上传的队列项。设备 token 只允许存在于忽略的 `sdkconfig` 和构建产物。
 

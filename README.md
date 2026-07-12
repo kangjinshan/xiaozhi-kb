@@ -166,6 +166,9 @@
 - 录音链路把 ES7210 的 24000Hz PCM 用小智同款 `esp_ae_rate_cvt` 转为 16000Hz，再按 10ms 帧调用 ESP-SR `ns_create` / `ns_process`，最后进行固定增益和限幅。
 - Recorder 复用小智保存的 Wi-Fi，保持 TLS WebSocket 在线；上传和下载均限制为 4096 字节块。回复每块写入 SD 后才确认累计字节数，服务端收到确认后再发下一块。
 - 所有完整 WAV 都校验 SHA-256。中断下载只留下不可播放的 `.part`，重启/重连时会清理并从服务端幂等重放；完整回复落卡后自动播放。
+- FATFS 不允许 `rename()` 覆盖现有文件；状态和回复更新会先把旧正式文件交换为
+  `.bak`，再发布已同步的 `.part`。掉电后可从备份 manifest 恢复，`.part` / `.bak`
+  永远不会进入播放菜单。
 
 Agent WSS 地址由 `CONFIG_AGENT_VOICE_URL` 配置，设备 bearer token 只写入被 Git 忽略的本地 `sdkconfig`；源码、README 和提交中不得出现真实 token。因 ESP32-C6 只有 USB-Serial-JTAG、无 USB-OTG，**无法把 SD 卡模拟成 U 盘**，需要通过读卡器或受控串口工具检查文件。
 

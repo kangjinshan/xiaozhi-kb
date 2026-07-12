@@ -89,6 +89,18 @@ Agent voice additions keep the same SPI2 ownership rule:
 - `assistant.wav.part` is never listed or played. Startup pending scans remove stale parts and request an idempotent replay.
 - Recorder input reserves DSP flush capacity below the 4 MiB protocol maximum and auto-stops at the limit.
 
+ESP-IDF FATFS does not provide POSIX replacement semantics for `rename()`:
+
+- Renaming `.part` directly onto an existing `turn.json` or `assistant.wav`
+  returns `FR_EXIST`. Host filesystems normally replace the destination, so an
+  ordinary macOS test does not reproduce this failure.
+- Durable publication writes and syncs `.part`, moves an existing primary to
+  `.bak`, publishes `.part`, restores the backup on failure, then removes the
+  backup after success.
+- If power is lost after the primary moved to `.bak`, startup reads the backup
+  manifest and the next state update republishes the primary. `.part` and
+  `.bak` are never listed or played.
+
 Before calling recorder work complete, run:
 
 ```bash
@@ -135,6 +147,13 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/recorder/agent_turn_store_test.cc \
   main/apps/recorder/agent_turn_store.cc \
   -o /tmp/agent_turn_store_test && /tmp/agent_turn_store_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -Drename=AgentTurnStoreFatRename \
+  -I main/apps/recorder \
+  main/apps/recorder/agent_turn_store_fatfs_test.cc \
+  main/apps/recorder/agent_turn_store.cc \
+  -o /tmp/agent_turn_store_fatfs_test && /tmp/agent_turn_store_fatfs_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
