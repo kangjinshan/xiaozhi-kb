@@ -1,5 +1,7 @@
 #include "recorder_file_list.h"
 
+#include "agent_turn_manifest.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -118,12 +120,17 @@ std::vector<RecorderFileEntry> RecorderListAgentRecordings(const char* root,
             if (turn_id == "." || turn_id == ".." || !IsDirectory(turn_path)) {
                 continue;
             }
+            AgentTurnConversation conversation;
+            AgentReadTurnConversation(turn_path + "/turn.json", &conversation);
             for (const char* name : {"assistant.wav", "user.wav"}) {
                 RecorderFileEntry entry;
                 entry.name = name;
                 entry.path = turn_path + "/" + name;
                 entry.date = date;
                 entry.turn_id = turn_id;
+                entry.conversation_text = entry.name == "assistant.wav"
+                    ? conversation.reply_text
+                    : conversation.transcript;
                 if (IsRegularFile(entry.path, &entry.size_bytes)) {
                     entries.push_back(std::move(entry));
                 }
@@ -150,6 +157,9 @@ std::vector<RecorderFileEntry> RecorderListAgentRecordings(const char* root,
 }
 
 std::string RecorderFormatRecordingDetail(const RecorderFileEntry& entry) {
+    if (!entry.conversation_text.empty()) {
+        return entry.conversation_text;
+    }
     char detail[32];
     if (entry.size_bytes >= 1024 * 1024) {
         const unsigned mb10 = (entry.size_bytes * 10U) / (1024U * 1024U);

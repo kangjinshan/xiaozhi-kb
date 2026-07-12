@@ -11,6 +11,7 @@ struct RecorderFileEntry {
     std::string path;
     std::string date;
     std::string turn_id;
+    std::string conversation_text;
     int index = -1;
     uint32_t size_bytes = 0;
 };

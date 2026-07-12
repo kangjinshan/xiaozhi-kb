@@ -31,7 +31,7 @@
 - Modify: `main/apps/recorder/recorder_file_list.cc`
 - Modify: `main/apps/recorder/recorder_playback_menu_test.cc`
 
-- [ ] **Step 1: Write the failing history test**
+- [x] **Step 1: Write the failing history test**
 
 Extend `TestAgentTurnAudioStaysAdjacentNewestFirst()` to write a published
 `turn.json` containing escaped Chinese transcript/reply text and assert:
@@ -52,7 +52,7 @@ Check(RecorderFormatRecordingDetail(entries[0]) == entries[0].conversation_text,
 Add separate malformed and oversized manifest fixtures and assert their rows
 have empty `conversation_text` and retain a `B`/`KB` size detail.
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -69,7 +69,7 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 Expected: compilation fails because `conversation_text` and the manifest reader
 do not exist.
 
-- [ ] **Step 3: Implement the bounded manifest reader**
+- [x] **Step 3: Implement the bounded manifest reader**
 
 Define:
 
@@ -89,7 +89,7 @@ Read the exact stat size, decode the five escape forms emitted by
 preview to one line, trim it, and cap it at 240 bytes without ending on a UTF-8
 continuation byte.
 
-- [ ] **Step 4: Attach text to the matching WAV entries**
+- [x] **Step 4: Attach text to the matching WAV entries**
 
 Add `std::string conversation_text` to `RecorderFileEntry`. Read
 `turn.json` once per turn directory before iterating audio names, assign
@@ -97,12 +97,12 @@ Add `std::string conversation_text` to `RecorderFileEntry`. Read
 `RecorderFormatRecordingDetail()` return non-empty conversation text before its
 existing size formatting.
 
-- [ ] **Step 5: Run the test and verify GREEN**
+- [x] **Step 5: Run the test and verify GREEN**
 
 Run the Step 2 command and `/tmp/recorder_playback_menu_test`.
 Expected: `recorder_playback_menu_test passed`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add main/apps/recorder/agent_turn_manifest.* \

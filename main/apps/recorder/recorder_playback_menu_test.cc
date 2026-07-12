@@ -24,6 +24,13 @@ void WriteBytes(const std::string& path, const char* bytes) {
     std::fclose(f);
 }
 
+void WriteText(const std::string& path, const std::string& text) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    Check(f != nullptr, "create temp text file");
+    std::fwrite(text.data(), 1, text.size(), f);
+    std::fclose(f);
+}
+
 void PutLe16(uint8_t* p, uint16_t value) {
     p[0] = static_cast<uint8_t>(value & 0xFF);
     p[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
@@ -101,6 +108,9 @@ void TestAgentTurnAudioStaysAdjacentNewestFirst() {
     WriteBytes(newer + "/user.wav", "new-user");
     WriteBytes(newer + "/assistant.wav", "new-assistant");
     WriteBytes(newer + "/assistant.wav.part", "ignored");
+    WriteBytes(newer + "/turn.json",
+               "{\"transcript\":\"上海明天\\n天气怎么样\","
+               "\"reply_text\":\"明天晴朗，最高 29℃\"}");
 
     auto entries = RecorderListAgentRecordings(root, 8);
     Check(entries.size() == 4, "both complete files from each turn are listed");
@@ -112,8 +122,18 @@ void TestAgentTurnAudioStaysAdjacentNewestFirst() {
           "assistant audio is labeled as an AI reply");
     Check(RecorderConversationLabel(entries[1]) == "你",
           "user audio is labeled as the user");
+    Check(entries[0].conversation_text == "明天晴朗，最高 29℃",
+          "assistant row carries reply text");
+    Check(entries[1].conversation_text == "上海明天 天气怎么样",
+          "user row carries normalized transcript");
+    Check(RecorderFormatRecordingDetail(entries[0]) == entries[0].conversation_text,
+          "conversation text replaces byte-size detail");
     Check(entries[2].turn_id == "turn-100" && entries[3].turn_id == "turn-100",
           "older turn follows newest turn");
+    Check(entries[2].conversation_text.empty(),
+          "turn without a published manifest keeps empty conversation text");
+    Check(RecorderFormatRecordingDetail(entries[2]).find("B") != std::string::npos,
+          "turn without conversation text keeps byte-size detail");
 
     RecorderFileEntry legacy;
     legacy.name = "rec7.wav";
@@ -124,8 +144,43 @@ void TestAgentTurnAudioStaysAdjacentNewestFirst() {
         unlink(entry.path.c_str());
     }
     unlink((newer + "/assistant.wav.part").c_str());
+    unlink((newer + "/turn.json").c_str());
     rmdir(newer.c_str());
     rmdir(older.c_str());
+    rmdir(date.c_str());
+    rmdir(root);
+}
+
+void TestInvalidManifestFallsBackToAudioSize() {
+    char dir_template[] = "/tmp/recorder-agent-invalid-menu-test-XXXXXX";
+    char* root = mkdtemp(dir_template);
+    Check(root != nullptr, "mkdtemp invalid manifest root");
+    const std::string date = std::string(root) + "/20260712";
+    const std::string malformed = date + "/turn-malformed";
+    const std::string oversized = date + "/turn-oversized";
+    Check(mkdir(date.c_str(), 0700) == 0, "create invalid manifest date");
+    Check(mkdir(malformed.c_str(), 0700) == 0, "create malformed turn");
+    Check(mkdir(oversized.c_str(), 0700) == 0, "create oversized turn");
+
+    WriteBytes(malformed + "/user.wav", "malformed-user");
+    WriteBytes(malformed + "/turn.json", "{\"transcript\":\"unterminated");
+    WriteBytes(oversized + "/assistant.wav", "oversized-assistant");
+    WriteText(oversized + "/turn.json", std::string(16 * 1024 + 1, 'x'));
+
+    const auto entries = RecorderListAgentRecordings(root, 8);
+    Check(entries.size() == 2, "invalid manifest audio remains listed");
+    for (const auto& entry : entries) {
+        Check(entry.conversation_text.empty(),
+              "invalid manifest never supplies conversation text");
+        Check(RecorderFormatRecordingDetail(entry).find("B") != std::string::npos,
+              "invalid manifest falls back to byte-size detail");
+        unlink(entry.path.c_str());
+    }
+
+    unlink((malformed + "/turn.json").c_str());
+    unlink((oversized + "/turn.json").c_str());
+    rmdir(malformed.c_str());
+    rmdir(oversized.c_str());
     rmdir(date.c_str());
     rmdir(root);
 }
@@ -169,6 +224,7 @@ void TestUnsupportedWavHeaderIsRejected() {
 int main() {
     TestRecordingListSortsNewestFirst();
     TestAgentTurnAudioStaysAdjacentNewestFirst();
+    TestInvalidManifestFallsBackToAudioSize();
     TestCanonicalWavHeaderIsAccepted();
     TestUnsupportedWavHeaderIsRejected();
     std::puts("recorder_playback_menu_test passed");
