@@ -1,10 +1,10 @@
 # XiaoZhi KB 协作开发指南
 
-> 最后更新：2026-07-11
+> 最后更新：2026-07-12
 
 ## 1. 系统概述
 
-本仓库基于小智 ESP32 开源固件，主要适配 `Waveshare ESP32-C6-Touch-AMOLED-2.16`。固件通过 NVS 在四种启动模式间分派：应用选择器、小智语音、BLE HID 键盘和 SD 卡录音器。
+本仓库基于小智 ESP32 开源固件，主要适配 `Waveshare ESP32-C6-Touch-AMOLED-2.16`。固件通过 NVS 在四种启动模式间分派：应用选择器、小智语音、BLE HID 键盘和金山 AI 语音助手（内部模式名仍为 recorder）。
 
 核心技术栈为 C/C++、ESP-IDF 5.5.3、FreeRTOS、LVGL、Bluedroid BLE HID、FATFS/SDSPI、ESP-SR 和 NVS。目标芯片是 ESP32-C6，默认分区表为 `partitions/v2/16m_c3.csv`。
 
@@ -13,7 +13,7 @@
 | 目录 | 职责 | 关键说明 | AGENTS.md |
 | --- | --- | --- | --- |
 | `main/` | 固件入口、语音主循环、音频、显示、协议与板级适配 | `main/main.cc` 负责模式分派 | 本次未递归覆盖 |
-| `main/apps/` | 选择器、键盘和录音三个独立应用 | 模式值由 `AppModeRead()` 读取 | 本次未递归覆盖 |
+| `main/apps/` | 选择器、键盘和金山 AI 三个独立应用 | 模式值由 `AppModeRead()` 读取 | 本次未递归覆盖 |
 | `main/boards/waveshare/esp32-c6-touch-amoled-2.16/` | 目标板 GPIO、PMIC、AMOLED、触摸与 SD 初始化 | SPI2 共享约束是最高风险点 | [开发指南](main/boards/waveshare/esp32-c6-touch-amoled-2.16/AGENTS.md) |
 | `main/sdcard/` | SDSPI 挂载、自检和可选日志落盘 | `SdCardLogStart()` 不能用于小智或录音模式 | 本次未递归覆盖 |
 | `scripts/` | 构建、发布、资源和真机稳定性检查 | 串口脚本必须保持安全 DTR/RTS 状态 | [开发指南](scripts/AGENTS.md) |
@@ -40,9 +40,11 @@
   - 入口：`RunKeyboardApp()`（`main/apps/ble_keyboard/keyboard_app.cc`）
   - 核心逻辑：`BleHidKeyboard::Init()`、`KeyboardTouchArrows`
   - 副作用：广播 `XiaoZhi KB`，发送键盘报告；配置 2 可切换触区图。
-- **SD 卡录音和回放**
+- **金山 AI 助手交互、录音和回放**
   - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
-  - 核心逻辑：`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
+  - 核心逻辑：`RecorderBuildAssistantUi()`、`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
+  - 展示规则：`金山 AI` 静态界面只保留一个主按钮，语义为 `点击说话` / `发送` / `暂停` / `继续`；发送、思考和接收阶段禁用主按钮。
+  - 字体规则：固定中文文案从 `xiaozhi-fonts/ttf/puhui-common.ttf` 生成 `font_puhui_assistant_24_4.c` 子集；新增文案必须同步重生成子集并运行展示模型测试。
   - 副作用：新 turn 写 `/sdcard/agent/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧 `/sdcard/rec/recN.wav` 仅保留播放兼容。
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
@@ -73,6 +75,7 @@
   `FR_EXIST` 的 `agent_turn_store_fatfs_test.cc`，不能只依赖 macOS 的 POSIX rename。
 - Agent 回复禁止在网络回调中直接写 SD；主任务每成功落卡一个块后发送 `reply_chunk_saved`，服务端收到精确累计字节 ACK 才能继续发送。`assistant.wav.part` 永远不可播放。
 - 单个上传 WAV 上限为 4 MiB；录音链路必须预留 DSP flush 空间并自动停止，不能生成永久无法上传的队列项。设备 token 只允许存在于忽略的 `sdkconfig` 和构建产物。
+- 助手 UI 必须通过纯 `RecorderAssistantUiInput` → `RecorderAssistantUiModel` 映射渲染，不在显示回调中访问 SD、网络或 codec；保持静态组件，不增加 LVGL 动画或 UI 定时器。
 
 ### 已确认故障（2026-07-11）
 
@@ -85,7 +88,7 @@
 
 - 新增或调整应用模式：`main/apps/app_mode.*`、`main/main.cc`、`main/apps/app_selector.cc`。
 - 调整目标板引脚或初始化顺序：目标板目录的 `config.h` 和 `.cc`；先检查 SPI2、I2C0、USB 引脚冲突。
-- 修改录音 UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。
+- 修改金山 AI UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增中文前先更新字体子集和 `recorder_assistant_ui_test.cc`。
 - 修改键盘触区：`main/apps/ble_keyboard/keyboard_touch_action.*`、`keyboard_touch_arrows.*`。
 - 修改 SD 日志：`main/sdcard/sdcard_log.cc`；若要在系统任务中使用，必须先改为独立日志任务和有界队列，不能简单增大 `sys_evt` 栈掩盖同步 I/O。
 

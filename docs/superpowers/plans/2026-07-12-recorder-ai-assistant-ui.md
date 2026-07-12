@@ -32,7 +32,7 @@
 - Create: `main/apps/recorder/recorder_assistant_ui_test.cc`
 - Modify: `main/CMakeLists.txt`
 
-- [ ] **Step 1: Write the failing presentation-model test**
+- [x] **Step 1: Write the failing presentation-model test**
 
 Create a host test that builds inputs with the existing authoritative enums and checks exact semantic output:
 
@@ -146,7 +146,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Run the model test and verify RED**
+- [x] **Step 2: Run the model test and verify RED**
 
 Run:
 
@@ -160,7 +160,7 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 
 Expected: compilation fails because the new presentation files and types do not exist.
 
-- [ ] **Step 3: Implement the model types and priority rules**
+- [x] **Step 3: Implement the model types and priority rules**
 
 Define these public types in `recorder_assistant_ui.h`:
 
@@ -204,7 +204,7 @@ spec and these exact activity titles: `准备好了`, `离线可用`, `正在聆
 `正在重试`, `请插入存储卡`, `请设置网络`, `请设置助手`, `录音不可用`,
 and `保存失败`.
 
-- [ ] **Step 4: Generate the bounded Chinese font subset**
+- [x] **Step 4: Generate the bounded Chinese font subset**
 
 Use Xiaozhi's existing `managed_components/78__xiaozhi-fonts/ttf/puhui-common.ttf`
 with the 78/lv_font_conv tool to generate a 24 px, 4 bpp LVGL C font named
@@ -212,7 +212,7 @@ with the 78/lv_font_conv tool to generate a 24 px, 4 bpp LVGL C font named
 appearing in the presentation model, `金山 AI`, `对话历史`, `AI 回复`, and `你`.
 Commit the generated C source; do not edit or commit `managed_components`.
 
-- [ ] **Step 5: Add the sources to firmware and verify GREEN**
+- [x] **Step 5: Add the sources to firmware and verify GREEN**
 
 Append `apps/recorder/recorder_assistant_ui.cc` and
 `apps/recorder/font_puhui_assistant_24_4.c` beside the other Recorder sources
@@ -224,7 +224,7 @@ in `main/CMakeLists.txt`, then run the command from Step 2 followed by:
 
 Expected: `recorder_assistant_ui_test passed`.
 
-- [ ] **Step 6: Commit the model and font subset**
+- [x] **Step 6: Commit the model and font subset**
 
 ```bash
 git add main/CMakeLists.txt main/apps/recorder/recorder_assistant_ui.*
@@ -237,7 +237,7 @@ git commit -m "feat(recorder): model AI assistant presentation"
 - Modify: `main/apps/recorder/recorder_display.h`
 - Modify: `main/apps/recorder/recorder_display.cc`
 
-- [ ] **Step 1: Add the unified render contract**
+- [x] **Step 1: Add the unified render contract**
 
 Include `recorder_assistant_ui.h` from `recorder_display.h` and replace
 `RecorderShowText()` / `RecorderDisplaySetState()` with:
@@ -251,7 +251,7 @@ continues exposing `record`, `stop`, `open_menu`, `pause_resume`, `exit`, and
 `play_file`; the one button dispatches to these existing callbacks based on the
 model's `primary_action`.
 
-- [ ] **Step 2: Build the assistant widget tree**
+- [x] **Step 2: Build the assistant widget tree**
 
 Replace the old title/subtitle plus separate REC/PLAY/action buttons with fixed
 widgets for:
@@ -274,7 +274,7 @@ button, and one 150×42 history button. Do not create LVGL animations or timers.
 Add pressed-state styling to active buttons and disabled opacity to the primary
 button. Keep all coordinates within the 480×480 target.
 
-- [ ] **Step 3: Implement model rendering and primary dispatch**
+- [x] **Step 3: Implement model rendering and primary dispatch**
 
 Store the latest semantic primary action in the display module. On primary click:
 
@@ -299,13 +299,13 @@ switch (s_primary_action) {
 LVGL lock, applies or clears `LV_STATE_DISABLED`, and hides the history button when
 the model says it is unavailable. It must not touch SD, network, or codec objects.
 
-- [ ] **Step 4: Restyle the history overlay**
+- [x] **Step 4: Restyle the history overlay**
 
 Rename its title to `对话历史`, retain `BACK`, and use the assistant
 palette. Keep the existing scrollable list and path storage so callback pointers
 remain stable.
 
-- [ ] **Step 5: Run syntax/static checks and commit**
+- [x] **Step 5: Run syntax/static checks and commit**
 
 Run:
 
@@ -328,7 +328,7 @@ git commit -m "feat(recorder): render single-action assistant UI"
 **Files:**
 - Modify: `main/apps/recorder/recorder_app.cc`
 
-- [ ] **Step 1: Add one render helper and explicit transient notices**
+- [x] **Step 1: Add one render helper and explicit transient notices**
 
 Maintain `RecorderAssistantNotice ui_notice` plus a monotonic expiration for DSP
 and save failures. Add a local renderer that constructs `RecorderAssistantUiInput`
@@ -336,7 +336,7 @@ from `control.mode`, `voice_state.phase`, `voice_state.queued_turn`, `sd_ok`, no
 reduction availability, elapsed recording seconds, and codec volume, then calls
 `RecorderDisplayRenderAssistant(RecorderBuildAssistantUi(input))`.
 
-- [ ] **Step 2: Replace utility text updates at every transition**
+- [x] **Step 2: Replace utility text updates at every transition**
 
 Render after initialization, Wi-Fi/socket state changes, WSS ready, turn upload,
 turn accepted, reply start, reply store, playback start/pause/resume/volume change,
@@ -344,7 +344,7 @@ playback finish, recording start/timer/finish, and recoverable errors. Keep each
 existing pause/resume pair around SD operations unchanged. Do not move file,
 network, hash, or codec calls into display callbacks.
 
-- [ ] **Step 3: Preserve interaction semantics through the primary button**
+- [x] **Step 3: Preserve interaction semantics through the primary button**
 
 The primary button must publish the same existing reducer events:
 
@@ -356,7 +356,7 @@ Busy-state taps do not publish an event because the display is disabled; reducer
 guards remain unchanged as defense in depth. History continues publishing
 `kTouchPlay`.
 
-- [ ] **Step 4: Run reducer/model regressions and commit**
+- [x] **Step 4: Run reducer/model regressions and commit**
 
 Run:
 
@@ -390,7 +390,7 @@ git commit -m "feat(recorder): present Agent turns as conversation"
 - Modify: `main/apps/recorder/recorder_playback_menu_test.cc`
 - Modify: `main/apps/recorder/recorder_app.cc`
 
-- [ ] **Step 1: Write failing semantic-label assertions**
+- [x] **Step 1: Write failing semantic-label assertions**
 
 Add to the playback menu test:
 
@@ -405,7 +405,7 @@ Check(RecorderConversationLabel(legacy) == "录音",
       "legacy audio has a neutral label");
 ```
 
-- [ ] **Step 2: Run the history test and verify RED**
+- [x] **Step 2: Run the history test and verify RED**
 
 Run:
 
@@ -420,7 +420,7 @@ c++ -std=c++17 -Wall -Wextra -Werror \
 
 Expected: compilation fails because `RecorderConversationLabel` is undefined.
 
-- [ ] **Step 3: Implement and use semantic labels**
+- [x] **Step 3: Implement and use semantic labels**
 
 Add:
 
@@ -434,7 +434,7 @@ std::string RecorderConversationLabel(const RecorderFileEntry& entry) {
 
 Use this helper in `ShowPlaybackMenu()` and keep the existing detail/path values.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Build and run `/tmp/recorder_playback_menu_test`; expect
 `recorder_playback_menu_test passed`.
@@ -455,14 +455,14 @@ git commit -m "feat(recorder): label audio as conversation history"
 - Modify: `docs/recorder-design-guardrails.md`
 - Modify: `docs/superpowers/plans/2026-07-12-recorder-ai-assistant-ui.md`
 
-- [ ] **Step 1: Update durable documentation**
+- [x] **Step 1: Update durable documentation**
 
 Describe `金山 AI`, the single `点击说话`/`发送` control, state progression,
 disabled busy interaction, assistant history labels, static rendering, and the
 unchanged SPI2/SD safety boundary. Replace user instructions that describe separate
 `REC`, `STOP`, and `PLAY` buttons.
 
-- [ ] **Step 2: Run every Recorder host regression**
+- [x] **Step 2: Run every Recorder host regression**
 
 Run all commands in `docs/recorder-design-guardrails.md`, including the new
 `recorder_assistant_ui_test`, control state, display area, rate converter, noise
@@ -471,7 +471,7 @@ network event tests.
 
 Expected: every executable prints its pass marker and exits zero.
 
-- [ ] **Step 3: Build the complete ESP32-C6 firmware**
+- [x] **Step 3: Build the complete ESP32-C6 firmware**
 
 Run without displaying `sdkconfig`:
 
@@ -484,7 +484,7 @@ Expected: firmware builds successfully for the configured Waveshare ESP32-C6
 board. Do not print, copy, or commit `sdkconfig`; verify only that it remains
 ignored and non-empty.
 
-- [ ] **Step 4: Commit docs and completed plan**
+- [x] **Step 4: Commit docs and completed plan**
 
 Mark every completed step in this plan, then run:
 

@@ -89,6 +89,15 @@ Agent voice additions keep the same SPI2 ownership rule:
 - `assistant.wav.part` is never listed or played. Startup pending scans remove stale parts and request an idempotent replay.
 - Recorder input reserves DSP flush capacity below the 4 MiB protocol maximum and auto-stops at the limit.
 
+The user-facing recorder presentation is a voice assistant, not a recording utility:
+
+- The selector entry is `Jinshan AI`; the main screen identity is `金山 AI`.
+- One primary button maps to `点击说话`, `发送`, `暂停`, or `继续`. It is disabled while a turn is sending, thinking, or receiving.
+- `RecorderBuildAssistantUi()` is the only presentation-state mapper. Display callbacks publish existing reducer events and never access SD, network, or codec objects.
+- The UI uses a fixed LVGL object tree without animations or UI timers. Runtime changes only update text, colors, visibility, and disabled state.
+- Chinese fixed copy uses `font_puhui_assistant_24_4`, generated as a bounded subset from XiaoZhi's `puhui-common.ttf`. Regenerate the subset whenever fixed Chinese copy changes.
+- History labels are semantic: `你`, `AI 回复`, and legacy `录音`; `.part` and `.bak` files remain hidden.
+
 ESP-IDF FATFS does not provide POSIX replacement semantics for `rename()`:
 
 - Renaming `.part` directly onto an existing `turn.json` or `assistant.wav`
@@ -108,7 +117,14 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
   main/apps/recorder/recorder_control_state_test.cc \
   main/apps/recorder/recorder_control_state.cc \
+  main/apps/recorder/agent_voice_state.cc \
   -o /tmp/recorder_control_state_test && /tmp/recorder_control_state_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_assistant_ui_test.cc \
+  main/apps/recorder/recorder_assistant_ui.cc \
+  -o /tmp/recorder_assistant_ui_test && /tmp/recorder_assistant_ui_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \
@@ -172,23 +188,22 @@ source ~/esp/esp-idf/export.sh
 idf.py build
 nm build/esp-idf/main/libmain.a | rg ' U ns_(create|pro_create)$'
 idf.py -p /dev/cu.usbmodem1101 flash
-idf.py -p /dev/cu.usbmodem1101 monitor
+/tmp/ser-venv/bin/python scripts/verify_agent_voice_runtime.py \
+  --port-glob /dev/cu.usbmodem1101 --duration 30
 ```
 
 Real-device acceptance checks:
 
-- Recorder boot reaches the idle screen without reboot loops for at least
-  15 seconds.
+- Jinshan AI boot reaches `金山 AI` / `准备好了` without reboot loops for at least 15 seconds.
 - Logs show `ESP-SR NS enabled` and
   `recorder DSP: input=24000 output=16000 ns=enabled`.
 - Logs do not contain `spi_hal_setup_trans`, `Guru Meditation`, or `Rebooting`.
 - SD card mounts and self-test passes.
-- Recording start/stop saves a 16 kHz mono PCM16 WAV whose environment-only
-  regions are audibly quieter without clipped or missing speech.
-- `REC` and `STOP` work by touch, and physical keys do nothing while recording.
-- `PLAY` opens the recordings menu.
+- `点击说话` enters `正在聆听`; `发送` saves a 16 kHz mono PCM16 WAV whose environment-only regions are audibly quieter without clipped or missing speech. Physical keys do nothing while recording.
+- During a connected turn, the screen progresses through `正在发送`, `正在思考`, `准备回复`, and `正在播报`; the primary button is disabled while busy.
+- `历史` opens the conversation list and shows `你`, `AI 回复`, and legacy `录音` labels.
 - Both a legacy 24 kHz WAV and a new 16 kHz WAV play without rebooting.
-- `PAUSE` stops audible output, `RESUME` continues from the same position, and
+- `暂停` stops audible output, `继续` continues from the same position, and
   the screen stays responsive throughout.
 - Playback left/right clicks adjust volume by +10/-10 and clamp it to 0–100.
 - A short `MENU` press does nothing; a continuous two-second hold returns to
