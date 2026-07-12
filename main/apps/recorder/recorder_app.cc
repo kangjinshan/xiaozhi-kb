@@ -945,11 +945,46 @@ void RunRecorderApp() {
                              active_turn.paths.assistant_wav.c_str());
                     break;
                 }
-                case AgentVoiceControlType::kError:
-                    fail_connection(frame.retryable
-                                        ? "server requested retry"
-                                        : "server rejected turn");
+                case AgentVoiceControlType::kError: {
+                    if (frame.retryable) {
+                        fail_connection("server requested retry");
+                        break;
+                    }
+                    abort_reply();
+                    RecorderDisplayPause();
+                    const bool marked_failed = has_active_turn &&
+                        turn_store.MarkFailed(
+                            active_turn.paths,
+                            frame.error_code.empty()
+                                ? "server_rejected_turn"
+                                : frame.error_code);
+                    RecorderDisplayResume();
+                    if (!marked_failed) {
+                        fail_connection("rejected turn state could not be stored");
+                        break;
+                    }
+                    ESP_LOGW(TAG, "Agent turn rejected permanently: %s",
+                             frame.error_code.c_str());
+                    AgentVoiceReduce(
+                        &voice_state, AgentVoiceEvent::kTurnRejected);
+                    sync_voice_control();
+                    load_oldest_pending();
+                    ui_notice = frame.error_code == "speech_not_recognized"
+                        ? RecorderAssistantNotice::kSpeechNotRecognized
+                        : RecorderAssistantNotice::kSaveFailure;
+                    ui_notice_until_ms = RecorderMonotonicMs() + 2500;
+                    if (has_active_turn && network.IsSocketConnected()) {
+                        const AgentVoiceAction action = AgentVoiceReduce(
+                            &voice_state, AgentVoiceEvent::kTurnQueued);
+                        sync_voice_control();
+                        if (action == AgentVoiceAction::kSendQueuedTurn &&
+                            !send_turn_start()) {
+                            fail_connection("next queued turn could not start");
+                        }
+                    }
+                    RenderAssistant(&ui_context);
                     break;
+                }
                 case AgentVoiceControlType::kPong:
                     break;
                 default:

@@ -97,6 +97,10 @@ RecorderAssistantUiModel RecorderBuildAssistantUi(
                 model.title = "播放失败";
                 model.subtitle = "请检查录音文件";
                 break;
+            case RecorderAssistantNotice::kSpeechNotRecognized:
+                model.title = "没有听清";
+                model.subtitle = "请再说一次";
+                break;
             case RecorderAssistantNotice::kNone:
                 break;
         }

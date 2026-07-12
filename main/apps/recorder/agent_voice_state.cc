@@ -25,6 +25,10 @@ AgentVoiceAction AgentVoiceReduce(AgentVoiceState* state, AgentVoiceEvent event)
         case AgentVoiceEvent::kTurnAccepted:
             state->phase = AgentVoicePhase::kThinking;
             return AgentVoiceAction::kWaitForReply;
+        case AgentVoiceEvent::kTurnRejected:
+            state->phase = AgentVoicePhase::kOnline;
+            state->queued_turn = false;
+            return AgentVoiceAction::kNone;
         case AgentVoiceEvent::kReplyStarted:
             state->phase = AgentVoicePhase::kReceiving;
             return AgentVoiceAction::kReceiveReply;

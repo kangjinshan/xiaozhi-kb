@@ -21,6 +21,7 @@ enum class RecorderAssistantNotice {
     kDspFailure,
     kSaveFailure,
     kPlaybackFailure,
+    kSpeechNotRecognized,
 };
 
 struct RecorderAssistantUiInput {

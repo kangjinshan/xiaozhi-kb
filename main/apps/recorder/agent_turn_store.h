@@ -46,6 +46,8 @@ public:
                       const std::string& user_sha256,
                       uint64_t created_at_ms);
     bool UpdateState(const AgentTurnPaths& paths, AgentTurnStatus status);
+    bool MarkFailed(const AgentTurnPaths& paths,
+                    const std::string& error_code);
     std::vector<AgentPendingTurn> ListPending() const;
 
     bool BeginReply(const AgentTurnPaths& paths,

@@ -52,5 +52,11 @@ int main() {
            AgentVoiceAction::kSendQueuedTurn);
     assert(state.phase == AgentVoicePhase::kSending);
 
+    assert(AgentVoiceReduce(&state, AgentVoiceEvent::kTurnRejected) ==
+           AgentVoiceAction::kNone);
+    assert(state.phase == AgentVoicePhase::kOnline);
+    assert(!state.queued_turn);
+    assert(AgentVoiceCanRecord(state));
+
     return 0;
 }

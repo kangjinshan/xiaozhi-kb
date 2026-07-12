@@ -74,6 +74,17 @@ int main() {
     assert(manifest.find("2026-07-12T10:00:00+08:00") != std::string::npos);
     assert(ReadText(root + "/turns.jsonl").find("turn-1") != std::string::npos);
 
+    AgentTurnPaths failed = store.Create("20260712", "turn-failed");
+    assert(failed.valid());
+    WriteFile(failed.user_wav, user_wav);
+    assert(store.MarkRecorded(
+        failed, user_wav.size(), user_hash, 1783821630000ULL));
+    assert(store.MarkFailed(failed, "speech_not_recognized"));
+    assert(store.ListPending().empty());
+    assert(ReadText(failed.manifest).find(
+               "\"last_error\":\"speech_not_recognized\"") !=
+           std::string::npos);
+
     AgentTurnPaths interrupted = store.Create("20260712", "turn-2");
     assert(interrupted.valid());
     WriteFile(interrupted.user_wav, user_wav);

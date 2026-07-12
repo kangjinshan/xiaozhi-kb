@@ -138,6 +138,13 @@ void TestStorageSetupAndTransientFailuresTakePriority() {
     input.notice = RecorderAssistantNotice::kPlaybackFailure;
     model = RecorderBuildAssistantUi(input);
     Check(model.title == "播放失败", "playback failure title");
+
+    input.notice = RecorderAssistantNotice::kSpeechNotRecognized;
+    model = RecorderBuildAssistantUi(input);
+    Check(model.title == "没有听清", "unrecognized speech title");
+    Check(model.subtitle == "请再说一次", "unrecognized speech guidance");
+    Check(!model.primary_enabled,
+          "unrecognized speech notice waits before retry action");
 }
 
 void TestConnectingAndRetryingRemainUnderstandable() {

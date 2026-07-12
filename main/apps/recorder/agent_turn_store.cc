@@ -269,6 +269,17 @@ bool AgentTurnStore::UpdateState(const AgentTurnPaths& paths,
     return WriteRecord(paths, record);
 }
 
+bool AgentTurnStore::MarkFailed(const AgentTurnPaths& paths,
+                                const std::string& error_code) {
+    Record record;
+    if (!LoadRecord(paths, &record)) {
+        return false;
+    }
+    record.status = AgentTurnStatus::kFailed;
+    record.last_error = error_code;
+    return WriteRecord(paths, record);
+}
+
 std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
     std::vector<AgentPendingTurn> pending;
     DIR* root = opendir(root_.c_str());
@@ -307,7 +318,8 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
             }
             Record record;
             if (!LoadRecord(paths, &record) ||
-                record.status == AgentTurnStatus::kComplete) {
+                record.status == AgentTurnStatus::kComplete ||
+                record.status == AgentTurnStatus::kFailed) {
                 continue;
             }
             unlink((paths.assistant_wav + ".part").c_str());

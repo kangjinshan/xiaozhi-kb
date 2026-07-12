@@ -88,11 +88,13 @@ Agent voice additions keep the same SPI2 ownership rule:
 - The recorder main task pauses LVGL around each SD read/write, then acknowledges a reply chunk only after its bytes are on the card.
 - `assistant.wav.part` is never listed or played. Startup pending scans remove stale parts and request an idempotent replay.
 - Recorder input reserves DSP flush capacity below the 4 MiB protocol maximum and auto-stops at the limit.
+- Processor errors are not all equivalent. A control frame with `retryable=true` keeps the existing reconnect/replay path. A frame with `retryable=false` is terminal for the active turn: abort any partial reply, atomically persist `failed` plus the stable error code, clear the queued reducer state, and continue with the next pending turn or online idle. `ListPending()` must exclude `failed`, while its `user.wav` remains on SD for history and diagnosis.
 
 The user-facing recorder presentation is a voice assistant, not a recording utility:
 
 - The selector entry is `Jinshan AI`; the main screen identity is `金山 AI`.
 - One primary button maps to `点击说话`, `发送`, `暂停`, or `继续`. It is disabled while a turn is sending, thinking, or receiving.
+- Empty STT uses the terminal notice `没有听清` / `请再说一次`; after the bounded notice interval the talk action becomes available again instead of replaying the same WAV forever.
 - `RecorderBuildAssistantUi()` is the only presentation-state mapper. Display callbacks publish existing reducer events and never access SD, network, or codec objects.
 - The UI uses a fixed LVGL object tree without animations or UI timers. Runtime changes only update text, colors, visibility, and disabled state.
 - Chinese fixed copy uses `font_puhui_assistant_24_4`, generated as a bounded subset from XiaoZhi's `puhui-common.ttf`. Regenerate the subset whenever fixed Chinese copy changes.
