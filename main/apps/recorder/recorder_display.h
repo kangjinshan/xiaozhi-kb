@@ -54,6 +54,10 @@ void RecorderDisplayRenderAssistant(const RecorderAssistantUiModel& model);
 void RecorderDisplayPause();
 void RecorderDisplayResume();
 
+// PWR 短按只控制 AMOLED 可见性。熄屏时保留一层 LVGL pause，避免后台刷新
+// 与共享 SPI2 上的 SD I/O 竞争；亮屏后重绘当前对象树。
+esp_err_t RecorderDisplaySetScreenOn(bool screen_on);
+
 // 展示或隐藏录音文件菜单。items 由调用方扫描 SD 卡后传入。
 void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& items);
 void RecorderDisplayHideFileMenu();

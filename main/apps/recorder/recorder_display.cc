@@ -36,8 +36,10 @@ constexpr uint8_t kAxp2101LdoEnableReg = 0x90;
 constexpr uint8_t kAxp2101Aldo3Mask = 0x04;
 
 bool s_display_initialized = false;
+bool s_screen_on = true;
 int s_pause_depth = 0;
 lv_display_t* s_display = nullptr;
+esp_lcd_panel_handle_t s_panel = nullptr;
 esp_lcd_panel_io_handle_t s_touch_io = nullptr;
 esp_lcd_touch_handle_t s_touch = nullptr;
 lv_obj_t* s_menu_button = nullptr;
@@ -611,6 +613,8 @@ esp_err_t RecorderDisplayInit(i2c_master_bus_handle_t i2c_bus, i2c_master_dev_ha
         lvgl_port_unlock();
     }
 
+    s_panel = panel;
+    s_screen_on = true;
     s_display_initialized = true;
     return ESP_OK;
 }
@@ -708,6 +712,44 @@ void RecorderDisplayResume() {
         }
         lvgl_port_task_wake(LVGL_PORT_EVENT_USER, nullptr);
     }
+}
+
+esp_err_t RecorderDisplaySetScreenOn(bool screen_on) {
+    if (!s_display_initialized || s_panel == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (screen_on == s_screen_on) {
+        return ESP_OK;
+    }
+
+    if (!screen_on) {
+        const int previous_pause_depth = s_pause_depth;
+        RecorderDisplayPause();
+        if (s_pause_depth != previous_pause_depth + 1) {
+            return ESP_ERR_TIMEOUT;
+        }
+        const esp_err_t err = esp_lcd_panel_disp_on_off(s_panel, false);
+        if (err != ESP_OK) {
+            RecorderDisplayResume();
+            return err;
+        }
+        s_screen_on = false;
+        ESP_LOGI(TAG, "PWR screen off");
+        return ESP_OK;
+    }
+
+    if (s_pause_depth <= 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const esp_err_t err = esp_lcd_panel_disp_on_off(s_panel, true);
+    if (err != ESP_OK) {
+        return err;
+    }
+    s_screen_on = true;
+    lv_obj_invalidate(lv_screen_active());
+    RecorderDisplayResume();
+    ESP_LOGI(TAG, "PWR screen on");
+    return ESP_OK;
 }
 
 void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& items) {

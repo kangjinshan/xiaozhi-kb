@@ -16,6 +16,7 @@
 #include "recorder_rate_converter.h"
 #include "recorder_turn_clock.h"
 #include "recorder_wav_file.h"
+#include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
 #include <esp_log.h>
@@ -40,6 +41,12 @@
 namespace {
 
 constexpr uint8_t kAxp2101Address = 0x34;
+constexpr uint8_t kAxp2101Irq1StatusReg = 0x48;
+constexpr uint8_t kAxp2101Irq2EnableReg = 0x41;
+constexpr uint8_t kAxp2101Irq2StatusReg = 0x49;
+constexpr uint8_t kAxp2101Irq3StatusReg = 0x4A;
+constexpr uint32_t kPowerKeyPollMs = 25;
+constexpr uint32_t kPmicReadWarnMs = 1000;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
 const char* kRecDir = "/sdcard/rec";
 const char* kAgentRoot = "/sdcard/agent";
@@ -48,6 +55,7 @@ constexpr size_t kPlaybackReadSamples = 4096;
 
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
 i2c_master_dev_handle_t s_pmic = nullptr;
+bool s_power_key_ready = false;
 
 struct RecorderRequest {
     RecorderControlEvent event;
@@ -60,6 +68,36 @@ std::deque<RecorderRequest> s_requests;
 esp_err_t WriteReg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val) {
     const uint8_t buf[2] = {reg, val};
     return i2c_master_transmit(dev, buf, sizeof(buf), 100);
+}
+
+esp_err_t ReadReg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t* val) {
+    return i2c_master_transmit_receive(dev, &reg, sizeof(reg), val, sizeof(*val), 100);
+}
+
+esp_err_t ClearAxp2101IrqStatus(i2c_master_dev_handle_t pmic) {
+    esp_err_t err = WriteReg(pmic, kAxp2101Irq1StatusReg, 0xFF);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = WriteReg(pmic, kAxp2101Irq2StatusReg, 0xFF);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return WriteReg(pmic, kAxp2101Irq3StatusReg, 0xFF);
+}
+
+esp_err_t ConfigureRecorderPowerKey(i2c_master_dev_handle_t pmic) {
+    uint8_t irq2_enable = 0;
+    esp_err_t err = ReadReg(pmic, kAxp2101Irq2EnableReg, &irq2_enable);
+    if (err != ESP_OK) {
+        return err;
+    }
+    irq2_enable |= Axp2101PowerKeyShortPressMask();
+    err = WriteReg(pmic, kAxp2101Irq2EnableReg, irq2_enable);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return ClearAxp2101IrqStatus(pmic);
 }
 
 // 建 I2C 总线（I2C_NUM_0, SDA=GPIO8/SCL=GPIO7）+ AXP2101 电源管理，
@@ -104,6 +142,12 @@ esp_err_t InitI2cAndPmic() {
             ESP_LOGE(TAG, "AXP2101 写寄存器 0x%02x 失败: %s", w.reg, esp_err_to_name(err));
             return err;
         }
+    }
+    err = ConfigureRecorderPowerKey(s_pmic);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "PWR 短按初始化失败: %s", esp_err_to_name(err));
+    } else {
+        s_power_key_ready = true;
     }
     return ESP_OK;
 }
@@ -220,6 +264,56 @@ void PublishRequest(RecorderControlEvent event, const char* path = nullptr) {
     s_requests.push_back({event, path != nullptr ? path : ""});
 }
 
+void RecorderPowerKeyTask(void*) {
+    TickType_t last_warning_tick = 0;
+    bool warning_logged = false;
+    bool short_press_latched = true;
+    while (true) {
+        const TickType_t now = xTaskGetTickCount();
+        uint8_t irq2_status = 0;
+        const esp_err_t err = ReadReg(
+            s_pmic, kAxp2101Irq2StatusReg, &irq2_status);
+        if (err != ESP_OK) {
+            if (!warning_logged ||
+                now - last_warning_tick >= pdMS_TO_TICKS(kPmicReadWarnMs)) {
+                ESP_LOGW(TAG, "PWR IRQ 读取失败: %s", esp_err_to_name(err));
+                last_warning_tick = now;
+                warning_logged = true;
+            }
+        } else {
+            if (warning_logged) {
+                ESP_LOGI(TAG, "PWR IRQ 读取恢复");
+                warning_logged = false;
+                last_warning_tick = 0;
+            }
+            if (!IsAxp2101PowerKeyShortPressIrq(irq2_status)) {
+                short_press_latched = false;
+            } else {
+                const esp_err_t clear_err = ClearAxp2101IrqStatus(s_pmic);
+                if (clear_err != ESP_OK) {
+                    ESP_LOGW(TAG, "PWR IRQ 清除失败: %s",
+                             esp_err_to_name(clear_err));
+                }
+                if (!short_press_latched) {
+                    short_press_latched = true;
+                    ESP_LOGI(TAG, "PWR short press");
+                    PublishRequest(RecorderControlEvent::kPhysicalPower);
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(kPowerKeyPollMs));
+    }
+}
+
+bool StartRecorderPowerKeyTask() {
+    if (!s_power_key_ready || s_pmic == nullptr) {
+        return false;
+    }
+    return xTaskCreate(
+               RecorderPowerKeyTask, "rec_pwr", 3072, nullptr, 5, nullptr) ==
+        pdPASS;
+}
+
 bool TakeRequest(RecorderRequest* request) {
     std::lock_guard<std::mutex> lock(s_request_mutex);
     if (request == nullptr || s_requests.empty()) {
@@ -289,7 +383,15 @@ RecorderControlAction ApplyRequest(const RecorderRequest& request,
                                    bool* exit_requested,
                                    RecorderAssistantRenderContext* ui_context) {
     RecorderControlAction action = RecorderControlReduce(control, request.event);
-    if (action == RecorderControlAction::kVolumeChanged && codec != nullptr) {
+    if (action == RecorderControlAction::kScreenPowerChanged) {
+        const bool requested_screen_on = control->screen_on;
+        const esp_err_t err = RecorderDisplaySetScreenOn(requested_screen_on);
+        if (err != ESP_OK) {
+            control->screen_on = !requested_screen_on;
+            ESP_LOGW(TAG, "PWR screen transition failed: %s",
+                     esp_err_to_name(err));
+        }
+    } else if (action == RecorderControlAction::kVolumeChanged && codec != nullptr) {
         codec->SetOutputVolume(control->volume);
     } else if (action == RecorderControlAction::kExit && exit_requested != nullptr) {
         *exit_requested = true;
@@ -477,6 +579,9 @@ void RunRecorderApp() {
     display_callbacks.exit = OnExitRequested;
     display_callbacks.play_file = OnPlayFileRequested;
     RecorderDisplaySetCallbacks(display_callbacks, nullptr);
+    if (!StartRecorderPowerKeyTask()) {
+        ESP_LOGW(TAG, "PWR 息屏任务不可用");
+    }
     RecorderDisplayPause();
 
     // 3. 再挂 SD 卡（复用屏已建的 SPI2 总线，own_spi_bus=false）
