@@ -128,6 +128,14 @@
 
 状态按 `recorded → sending → processing → receiving → complete` 演进。写元数据采用临时文件加原子改名。启动时扫描非 complete 轮次：已有 `user.wav` 的轮次重新入队；已有且哈希正确的 `assistant.wav` 不重复下载，直接补发确认。SD 卡不可用或空间不足时禁止开始新录音并在屏幕显示错误。
 
+ESP-IDF 的 FATFS `rename()` 不具备 POSIX 的“覆盖已存在目标”语义，目标存在时会返回
+`FR_EXIST`。因此 `turn.json` 和 `assistant.wav` 的发布必须使用可恢复交换：先完整写入并
+`fsync` 对应 `.part`，若正式文件存在则先将其改名为 `.bak`，再将 `.part` 改名为正式
+文件；第二步失败时恢复 `.bak`。启动扫描读取正式 manifest，正式文件缺失时回退读取
+`.bak`，下一次状态写入会重新发布正式文件并清除旧备份。`.part` 和 `.bak` 都不得列入
+播放菜单或自动播放。主机回归测试必须模拟 FATFS 的 no-overwrite rename，不能只依赖
+macOS/POSIX 文件系统行为。
+
 “所有来往存储到 SD 卡”具体包括所有用户语音、所有助手语音以及每轮可显示的文本和处理结果；TLS 包、心跳等传输层数据不落盘。
 
 ## 6. 用户交互与状态
