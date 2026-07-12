@@ -160,12 +160,12 @@
 - Azure 没有识别到有效语音时，界面短暂提示 `没有听清` / `请再说一次`，随后恢复可说话状态；该 turn 会在 SD 清单中原子标记为 `failed` 并保留 `user.wav`，但不会在重连或重启后反复上传。网络、模型、MCP 或 TTS 等暂时性错误仍按服务端 `retryable` 标志重试。
 - 发送后界面依次显示 `正在发送`、`正在思考`、`准备回复` 和 `正在播报`；忙碌阶段主按钮禁用，避免重复提交。
 - 回复完整落卡后自动播放。播放时同一主按钮切换为 `暂停` / `继续`，左键音量 +10，右键音量 -10（范围 0–100）。
-- 点 `历史` 查看对话；同一 turn 显示为 `你` 和 `AI 回复`，并从已发布的 `turn.json` 展示语音转写和回答预览，点行仍会播放对应音频。旧 `/sdcard/rec/recN.wav` 显示为 `录音`。
+- 点 `历史` 查看对话；同一 turn 显示为 `你` 和 `AI 回复`，并从已发布的 `turn.json` 展示语音转写和回答预览。动态中文按卡片宽度自动换行、卡片随内容增高，外层列表可继续滚动；点行仍会播放对应音频。旧 `/sdcard/rec/recN.wav` 显示为 `录音`。
 - 在任意助手界面持续按住左上角 `MENU` 2 秒返回应用选择界面；短按不会退出，退出前会先收尾当前录音。
 - 主界面使用静态 LVGL 组件，不启动 UI 动画或定时器；展示内容统一由纯状态模型生成。
 - 固定中文界面从小智 `puhui-common.ttf` 生成 24 px / 4 bpp 子集；动态对话预览直接内存映射 assets 分区已有的 `font_puhui_common_30_4.bin`，不向应用镜像重复加入约 2.5 MB 字库。
 - 每个 turn 存在 `/sdcard/agent/YYYYMMDD/<turn-id>/`，包含 `user.wav`、完成后才出现的 `assistant.wav` 和原子更新的 `turn.json`；完成索引追加到 `/sdcard/agent/turns.jsonl`。WSS 认证完成后由 Agent ready 帧提供当前时间和用户时区偏移，设备用单调时钟持续推进日期和固定宽度 turn ID；尚未联网校时时仍可录音到明确的 `/sdcard/agent/unsynced/`，不会伪装成 `19700101`。
-- `历史` 菜单把同一 turn 的 `AI 回复` / `你` 音频相邻显示；正式 `turn.json` 缺失、损坏或超过 16 KiB 时安全退回文件大小，并继续兼容原 `/sdcard/rec/recN.wav` 文件。
+- `历史` 菜单优先使用追加式 `turns.jsonl` 恢复真实完成顺序，每次打开回到最新记录所在的顶部，把同一 turn 的 `AI 回复` / `你` 音频相邻显示，达到行数上限时不拆开一轮；正式 `turn.json` 缺失、损坏或超过 16 KiB 时安全退回文件大小，并继续兼容原 `/sdcard/rec/recN.wav` 文件。
 - 新录音和 Agent 回复均为 WAV（单声道 / 16bit / 16000Hz）；播放器同时兼容旧 24000Hz 文件。单次录音接近 4 MiB 时自动停止并安全收尾。
 - 录音链路把 ES7210 的 24000Hz PCM 用小智同款 `esp_ae_rate_cvt` 转为 16000Hz，再按 10ms 帧调用 ESP-SR `ns_create` / `ns_process`，最后进行固定增益和限幅。
 - Recorder 复用小智保存的 Wi-Fi，保持 TLS WebSocket 在线；上传和下载均限制为 4096 字节块。回复每块写入 SD 后才确认累计字节数，服务端收到确认后再发下一块。
@@ -338,6 +338,12 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/recorder/recorder_display_area_test.cc \
   main/apps/recorder/recorder_display_area.cc \
   -o /tmp/recorder_display_area_test && /tmp/recorder_display_area_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_history_layout_test.cc \
+  main/apps/recorder/recorder_history_layout.cc \
+  -o /tmp/recorder_history_layout_test && /tmp/recorder_history_layout_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \

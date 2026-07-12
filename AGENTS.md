@@ -45,7 +45,7 @@
   - 核心逻辑：`RecorderBuildAssistantUi()`、`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
   - 展示规则：`金山 AI` 静态界面只保留一个主按钮，语义为 `点击说话` / `发送` / `暂停` / `继续`；发送、思考和接收阶段禁用主按钮。
   - 字体规则：固定中文文案从 `xiaozhi-fonts/ttf/puhui-common.ttf` 生成 `font_puhui_assistant_24_4.c` 子集；动态历史文本复用 assets 中的 `font_puhui_common_30_4.bin`，不得把完整字体重复链接进应用镜像。
-  - 历史规则：只读取不超过 16 KiB 的正式 `turn.json`，将 `transcript` / `reply_text` 映射到 `你` / `AI 回复`；缺失或损坏时退回文件大小，禁止读取 `.part` / `.bak`。
+  - 历史规则：只读取不超过 16 KiB 的正式 `turn.json`，将 `transcript` / `reply_text` 映射到 `你` / `AI 回复`；优先按追加式 `turns.jsonl` 的完成顺序排列旧 turn，每次展示重置到最新记录所在的顶部，截断不得拆开一轮；缺失或损坏时退回文件大小，禁止读取 `.part` / `.bak`。
   - 副作用：新 turn 写 `/sdcard/agent/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧 `/sdcard/rec/recN.wav` 仅保留播放兼容。
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
@@ -79,7 +79,7 @@
 - turn 日期和 ID 只能由纯 `RecorderTurnClock` 生成：认证 ready 帧的 Unix 毫秒与用户 UTC 偏移配合单调时钟得到本地 `YYYYMMDD`；未同步时使用八字符 `unsynced`。禁止恢复 `%llu` 格式化或把无效墙钟写成 `19700101`，ESP-IDF nano printf 不保证 64 位格式支持。
 - 单个上传 WAV 上限为 4 MiB；录音链路必须预留 DSP flush 空间并自动停止，不能生成永久无法上传的队列项。设备 token 只允许存在于忽略的 `sdkconfig` 和构建产物。
 - 助手 UI 必须通过纯 `RecorderAssistantUiInput` → `RecorderAssistantUiModel` 映射渲染，不在显示回调中访问 SD、网络或 codec；保持静态组件，不增加 LVGL 动画或 UI 定时器。
-- 动态对话字库只允许通过 `Assets` 内存映射现有 `font_puhui_common_30_4.bin`；加载失败必须非致命回退。历史清单读取仍由暂停 LVGL 后的 Recorder 主任务发起。
+- 动态对话字库只允许通过 `Assets` 内存映射现有 `font_puhui_common_30_4.bin`；加载失败必须非致命回退。对话详情必须自动换行并使用内容高度，禁止恢复固定高度加 `LV_LABEL_LONG_DOT` 的裁字布局；历史清单读取仍由暂停 LVGL 后的 Recorder 主任务发起。
 
 ### 已确认故障（2026-07-11）
 
@@ -92,7 +92,7 @@
 
 - 新增或调整应用模式：`main/apps/app_mode.*`、`main/main.cc`、`main/apps/app_selector.cc`。
 - 调整目标板引脚或初始化顺序：目标板目录的 `config.h` 和 `.cc`；先检查 SPI2、I2C0、USB 引脚冲突。
-- 修改金山 AI UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增固定中文前更新字体子集和展示模型测试；修改动态历史文本时同时运行 `recorder_playback_menu_test.cc` 与 `recorder_common_font_test.cc`。
+- 修改金山 AI UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增固定中文前更新字体子集和展示模型测试；修改动态历史文本时同时运行 `recorder_playback_menu_test.cc`、`recorder_history_layout_test.cc` 与 `recorder_common_font_test.cc`。
 - 修改键盘触区：`main/apps/ble_keyboard/keyboard_touch_action.*`、`keyboard_touch_arrows.*`。
 - 修改 SD 日志：`main/sdcard/sdcard_log.cc`；若要在系统任务中使用，必须先改为独立日志任务和有界队列，不能简单增大 `sys_evt` 栈掩盖同步 I/O。
 

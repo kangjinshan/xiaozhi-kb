@@ -43,6 +43,13 @@ If the manifest is absent, malformed, too large, or does not contain usable
 text, the row keeps its current byte-size detail. Legacy `/sdcard/rec/recN.wav`
 rows are unchanged.
 
+Completed turns are ordered by their append position in `turns.jsonl` before
+the row limit is applied. This repairs legacy `19700101/turn-lu-*` directories
+whose IDs contain a random suffix rather than a sortable timestamp. User and
+assistant rows stay adjacent, and truncation drops an older whole turn instead
+of exposing half of it. Rebuilding the menu resets its scroll position to zero
+so the newest rows cannot remain hidden by a previous visit's scroll offset.
+
 No network callback, LVGL callback, or codec callback reads SD. No new data is
 written and the turn schema remains unchanged.
 
@@ -53,9 +60,11 @@ After LVGL initializes and before history rows are created,
 `Assets` mmap API and constructs an `LvglCBinFont`. The wrapper remains alive for
 the lifetime of Jinshan AI mode.
 
-Only the history detail line uses this font. Its 38 px line height fits together
-with the 25 px semantic label in the existing 82 px row. Fixed controls continue
-using `font_puhui_assistant_24_4`, preserving current geometry and appearance.
+Only the history detail line uses this font. Conversation rows retain an 82 px
+minimum touch target, but their height follows content and the detail label
+wraps to the card width. The outer history list remains vertically scrollable.
+Fixed controls continue using `font_puhui_assistant_24_4`, preserving current
+geometry and appearance.
 
 Failure is non-fatal. Missing/invalid assets leave the detail line on the built-in
 20 px font and emit a serial warning; recording, storage, networking, history
@@ -65,9 +74,10 @@ playback, and menu navigation continue to work.
 
 Manifest reads are capped at 16 KiB. The parser accepts the JSON string escaping
 written by `AgentTurnStore` (`\\`, `\"`, `\n`, `\r`, and `\t`) and rejects
-unterminated strings. Embedded control characters are normalized to spaces for
-the one-line history preview. Text remains UTF-8 and LVGL's long-dot mode clips
-it to the row width without allocating a second unbounded display buffer.
+unterminated strings. Embedded control characters are normalized to spaces in
+the bounded preview. Text remains UTF-8; LVGL wraps it within the fixed card
+width and derives row height from the rendered content without allocating a
+second unbounded display buffer.
 
 Incomplete `.part` and recovery `.bak` files are never read or listed. Only the
 published `turn.json`, `user.wav`, and `assistant.wav` names participate.
@@ -79,7 +89,11 @@ Host tests prove that:
 - completed manifests populate the correct user and assistant detail;
 - JSON escapes are decoded for display;
 - missing/malformed/oversized manifests fall back to file size;
-- legacy recordings and existing newest-first ordering remain unchanged;
+- `turns.jsonl` restores the true latest legacy turn before row truncation;
+- row truncation never separates a user/assistant pair;
+- conversation layout uses content height and wrapped detail while legacy rows
+  stay compact;
+- legacy recordings remain supported;
 - `.part` files remain hidden.
 
 The ESP-IDF build proves the Assets/LVGL integration and partition fit. Device

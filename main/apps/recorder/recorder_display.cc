@@ -7,6 +7,7 @@
 #include "recorder_common_font.h"
 #include "recorder_control_state.h"
 #include "recorder_display_area.h"
+#include "recorder_history_layout.h"
 
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_io.h>
@@ -734,9 +735,17 @@ void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& ite
         lv_obj_set_style_text_font(s_empty_label, &font_puhui_assistant_24_4, 0);
     } else {
         for (size_t i = 0; i < items.size(); ++i) {
+            const RecorderHistoryRowLayout row_layout =
+                RecorderBuildHistoryRowLayout(items[i].conversation_detail);
             lv_obj_t* row = lv_button_create(s_file_list);
             lv_obj_set_width(row, LV_PCT(100));
-            lv_obj_set_height(row, 82);
+            lv_obj_set_height(
+                row,
+                row_layout.content_height
+                    ? LV_SIZE_CONTENT
+                    : row_layout.minimum_height);
+            lv_obj_set_style_min_height(row, row_layout.minimum_height, 0);
+            lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
             StyleButton(row, lv_color_hex(0x151C29), lv_color_hex(0x39465A));
             lv_obj_set_style_pad_left(row, 16, 0);
             lv_obj_set_style_pad_right(row, 16, 0);
@@ -759,7 +768,11 @@ void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& ite
             lv_obj_t* detail = lv_label_create(row);
             lv_label_set_text(detail, items[i].detail.c_str());
             lv_obj_set_width(detail, LV_PCT(100));
-            lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
+            lv_label_set_long_mode(
+                detail,
+                row_layout.wrap_detail
+                    ? LV_LABEL_LONG_WRAP
+                    : LV_LABEL_LONG_DOT);
             lv_obj_set_style_text_color(detail, lv_color_hex(0xA9B1BD), 0);
             lv_obj_set_style_text_font(
                 detail,
@@ -769,6 +782,9 @@ void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& ite
                 0);
         }
     }
+
+    lv_obj_scroll_to_y(
+        s_file_list, RecorderHistoryInitialScrollY(), LV_ANIM_OFF);
 
     SetFileMenuVisible(true);
     lv_obj_move_foreground(s_menu_button);

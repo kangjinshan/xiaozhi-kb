@@ -26,6 +26,102 @@ bool IsRegularFile(const std::string& path, uint32_t* size_bytes) {
     return true;
 }
 
+struct AgentHistoryIndexEntry {
+    std::string date;
+    std::string turn_id;
+};
+
+bool ExtractIndexString(const std::string& json,
+                        const char* key,
+                        std::string* output) {
+    if (key == nullptr || output == nullptr) {
+        return false;
+    }
+    const std::string marker = std::string("\"") + key + "\":\"";
+    const size_t start = json.find(marker);
+    if (start == std::string::npos) {
+        return false;
+    }
+    const size_t value_start = start + marker.size();
+    const size_t value_end = json.find('"', value_start);
+    if (value_end == std::string::npos || value_end == value_start) {
+        return false;
+    }
+    *output = json.substr(value_start, value_end - value_start);
+    return true;
+}
+
+std::vector<AgentHistoryIndexEntry> ReadRecentHistoryIndex(
+        const std::string& root) {
+    constexpr size_t kMaxRecentTurns = 128;
+    constexpr size_t kMaxIndexLineBytes = 512;
+    std::vector<AgentHistoryIndexEntry> index;
+    FILE* file = std::fopen((root + "/turns.jsonl").c_str(), "rb");
+    if (file == nullptr) {
+        return index;
+    }
+
+    char line[kMaxIndexLineBytes];
+    while (std::fgets(line, sizeof(line), file) != nullptr) {
+        const size_t length = std::strlen(line);
+        if (length == 0) {
+            continue;
+        }
+        if (line[length - 1] != '\n' && !std::feof(file)) {
+            int ch = 0;
+            while ((ch = std::fgetc(file)) != '\n' && ch != EOF) {
+            }
+            continue;
+        }
+
+        AgentHistoryIndexEntry entry;
+        const std::string json(line, length);
+        if (!ExtractIndexString(json, "date", &entry.date) ||
+            !ExtractIndexString(json, "turn_id", &entry.turn_id)) {
+            continue;
+        }
+        if (index.size() == kMaxRecentTurns) {
+            index.erase(index.begin());
+        }
+        index.push_back(std::move(entry));
+    }
+    std::fclose(file);
+    return index;
+}
+
+size_t FindHistoryOrder(const std::vector<AgentHistoryIndexEntry>& index,
+                        const RecorderFileEntry& entry) {
+    for (size_t position = index.size(); position > 0; --position) {
+        const auto& candidate = index[position - 1];
+        if (candidate.date == entry.date && candidate.turn_id == entry.turn_id) {
+            return position;
+        }
+    }
+    return 0;
+}
+
+bool IsCalendarDate(const std::string& date) {
+    return date.size() == 8 &&
+        std::all_of(date.begin(), date.end(), [](unsigned char ch) {
+            return ch >= '0' && ch <= '9';
+        });
+}
+
+void LimitWithoutSplittingTurn(std::vector<RecorderFileEntry>* entries,
+                               size_t max_entries) {
+    if (entries == nullptr || entries->size() <= max_entries) {
+        return;
+    }
+    size_t limit = max_entries;
+    if (limit > 0 && limit < entries->size() &&
+        !(*entries)[limit - 1].turn_id.empty() &&
+        (*entries)[limit - 1].date == (*entries)[limit].date &&
+        (*entries)[limit - 1].turn_id == (*entries)[limit].turn_id) {
+        --limit;
+    }
+    entries->resize(limit);
+}
+
 }  // namespace
 
 bool RecorderParseRecordingFilename(const char* filename, int* index) {
@@ -140,19 +236,32 @@ std::vector<RecorderFileEntry> RecorderListAgentRecordings(const char* root,
     }
     closedir(root_directory);
 
+    const auto history_index = ReadRecentHistoryIndex(root);
     std::sort(entries.begin(), entries.end(),
-              [](const RecorderFileEntry& a, const RecorderFileEntry& b) {
+              [&history_index](const RecorderFileEntry& a,
+                               const RecorderFileEntry& b) {
+                  const bool a_has_date = IsCalendarDate(a.date);
+                  const bool b_has_date = IsCalendarDate(b.date);
+                  if (a_has_date != b_has_date) {
+                      return a_has_date;
+                  }
                   if (a.date != b.date) {
                       return a.date > b.date;
+                  }
+                  const size_t a_order = FindHistoryOrder(history_index, a);
+                  const size_t b_order = FindHistoryOrder(history_index, b);
+                  if (a_order != b_order && a_order != 0 && b_order != 0) {
+                      return a_order > b_order;
+                  }
+                  if ((a_order != 0) != (b_order != 0)) {
+                      return a_order != 0;
                   }
                   if (a.turn_id != b.turn_id) {
                       return a.turn_id > b.turn_id;
                   }
                   return a.name < b.name;
               });
-    if (entries.size() > max_entries) {
-        entries.resize(max_entries);
-    }
+    LimitWithoutSplittingTurn(&entries, max_entries);
     return entries;
 }
 

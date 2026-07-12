@@ -151,6 +151,60 @@ void TestAgentTurnAudioStaysAdjacentNewestFirst() {
     rmdir(root);
 }
 
+void TestAgentHistoryUsesDurableCompletionOrderBeforeTruncating() {
+    char dir_template[] = "/tmp/recorder-agent-index-menu-test-XXXXXX";
+    char* root = mkdtemp(dir_template);
+    Check(root != nullptr, "mkdtemp indexed history root");
+    const std::string date = std::string(root) + "/19700101";
+    const std::string older = date + "/turn-lu-ffffff00";
+    const std::string newer = date + "/turn-lu-00000001";
+    Check(mkdir(date.c_str(), 0700) == 0, "create indexed history date");
+    Check(mkdir(older.c_str(), 0700) == 0, "create indexed older turn");
+    Check(mkdir(newer.c_str(), 0700) == 0, "create indexed newer turn");
+
+    WriteBytes(older + "/user.wav", "old-user");
+    WriteBytes(older + "/assistant.wav", "old-assistant");
+    WriteBytes(older + "/turn.json",
+               "{\"transcript\":\"旧问题\",\"reply_text\":\"旧回答\"}");
+    WriteBytes(newer + "/user.wav", "new-user");
+    WriteBytes(newer + "/assistant.wav", "new-assistant");
+    WriteBytes(newer + "/turn.json",
+               "{\"transcript\":\"最近问题\",\"reply_text\":\"最近回答\"}");
+    WriteText(std::string(root) + "/turns.jsonl",
+              "{\"turn_id\":\"turn-lu-ffffff00\",\"date\":\"19700101\","
+              "\"status\":\"complete\",\"created_at_ms\":100}\n"
+              "{\"turn_id\":\"turn-lu-00000001\",\"date\":\"19700101\","
+              "\"status\":\"complete\",\"created_at_ms\":200}\n");
+
+    const auto entries = RecorderListAgentRecordings(root, 2);
+    Check(entries.size() == 2, "row limit keeps one complete turn");
+    Check(entries[0].turn_id == "turn-lu-00000001" &&
+              entries[1].turn_id == "turn-lu-00000001",
+          "durable index keeps the actual latest two messages");
+    Check(entries[0].name == "assistant.wav" && entries[1].name == "user.wav",
+          "latest AI and user messages stay adjacent at the row limit");
+
+    const auto odd_limit_entries = RecorderListAgentRecordings(root, 3);
+    Check(odd_limit_entries.size() == 2,
+          "an odd row limit never exposes half of the next turn");
+    Check(odd_limit_entries[0].turn_id == "turn-lu-00000001" &&
+              odd_limit_entries[1].turn_id == "turn-lu-00000001",
+          "pair-preserving truncation keeps the newest complete turn");
+
+    for (const auto& entry : entries) {
+        unlink(entry.path.c_str());
+    }
+    unlink((older + "/user.wav").c_str());
+    unlink((older + "/assistant.wav").c_str());
+    unlink((older + "/turn.json").c_str());
+    unlink((newer + "/turn.json").c_str());
+    unlink((std::string(root) + "/turns.jsonl").c_str());
+    rmdir(newer.c_str());
+    rmdir(older.c_str());
+    rmdir(date.c_str());
+    rmdir(root);
+}
+
 void TestInvalidManifestFallsBackToAudioSize() {
     char dir_template[] = "/tmp/recorder-agent-invalid-menu-test-XXXXXX";
     char* root = mkdtemp(dir_template);
@@ -224,6 +278,7 @@ void TestUnsupportedWavHeaderIsRejected() {
 int main() {
     TestRecordingListSortsNewestFirst();
     TestAgentTurnAudioStaysAdjacentNewestFirst();
+    TestAgentHistoryUsesDurableCompletionOrderBeforeTruncating();
     TestInvalidManifestFallsBackToAudioSize();
     TestCanonicalWavHeaderIsAccepted();
     TestUnsupportedWavHeaderIsRejected();
