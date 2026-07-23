@@ -12,10 +12,8 @@
 
 #define TAG "keyboard_app"
 
-// 蓝牙键盘应用：两个物理键
-//   配置1保留旧键盘行为。
-//   菜单使用的配置2同时启用触摸键盘和空鼠：GPIO9/GPIO10 为鼠标
-//   左/右键，中间 PWR 切换屏幕亮屏/暗屏。
+// 蓝牙键鼠应用：亮屏时触摸屏作为触控板，暗屏时恢复九宫格键盘触区；
+// GPIO9/GPIO10 为鼠标左/右键，中间 PWR 切换两种输入模式。
 void RunKeyboardApp() {
     auto& kb = BleHidKeyboard::GetInstance();
     const KeyboardProfile profile = KeyboardProfileRead();
@@ -76,7 +74,8 @@ void RunKeyboardApp() {
 
     if (profile == KeyboardProfile::kProfile2) {
         ESP_LOGI(TAG,
-                 "keyboard+air-mouse running (gyro=always-on while connected, "
+                 "keyboard+touchpad running (bright=touch mouse, "
+                 "dark=touch keyboard, "
                  "boot=Mouse Left, gpio10=Mouse Right, "
                  "pwr=Screen Toggle)");
     } else {
@@ -95,7 +94,7 @@ void RunKeyboardApp() {
                  kb.IsConnected(),
                  kb.IsAdvertising(),
                  KeyboardZoneDisplayInitialized(),
-                 KeyboardAirMouseDisplayIsOn(),
+                 KeyboardInputModeDisplayIsOn(),
                  esp_err_to_name(KeyboardZoneDisplayLastError()));
         vTaskDelay(pdMS_TO_TICKS(5000));
     }

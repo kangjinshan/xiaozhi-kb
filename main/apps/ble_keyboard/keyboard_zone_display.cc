@@ -14,6 +14,8 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 
+#include <atomic>
+
 #define TAG "kb_zone_display"
 
 LV_FONT_DECLARE(font_puhui_basic_20_4);
@@ -26,7 +28,7 @@ constexpr uint8_t kAxp2101Aldo3Mask = 0x04;
 
 bool s_display_initialized = false;
 bool s_guide_visible = false;
-bool s_air_mouse_display_on = false;
+std::atomic_bool s_input_mode_display_on{false};
 bool s_display_refresh_paused = false;
 lv_display_t* s_display = nullptr;
 esp_lcd_panel_handle_t s_panel = nullptr;
@@ -399,8 +401,8 @@ esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic) {
     return ESP_OK;
 }
 
-esp_err_t KeyboardAirMouseDisplayToggle(i2c_master_dev_handle_t pmic,
-                                        SemaphoreHandle_t i2c_mutex) {
+esp_err_t KeyboardInputModeDisplayToggle(i2c_master_dev_handle_t pmic,
+                                         SemaphoreHandle_t i2c_mutex) {
     if (pmic == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -408,11 +410,11 @@ esp_err_t KeyboardAirMouseDisplayToggle(i2c_master_dev_handle_t pmic,
     esp_err_t err = InitializeDisplay(pmic, i2c_mutex);
     if (err != ESP_OK) {
         s_last_display_error = err;
-        ESP_LOGW(TAG, "air mouse display init failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "input mode display init failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    const bool next_on = !s_air_mouse_display_on;
+    const bool next_on = !s_input_mode_display_on.load();
     if (next_on) {
         err = SetDisplayOn(true);
         if (err != ESP_OK) {
@@ -437,7 +439,7 @@ esp_err_t KeyboardAirMouseDisplayToggle(i2c_master_dev_handle_t pmic,
             return err;
         }
     }
-    s_air_mouse_display_on = next_on;
+    s_input_mode_display_on.store(next_on);
     s_last_display_error = ESP_OK;
     return ESP_OK;
 }
@@ -446,8 +448,8 @@ bool KeyboardZoneDisplayInitialized() {
     return s_display_initialized;
 }
 
-bool KeyboardAirMouseDisplayIsOn() {
-    return s_air_mouse_display_on;
+bool KeyboardInputModeDisplayIsOn() {
+    return s_input_mode_display_on.load();
 }
 
 esp_err_t KeyboardZoneDisplayLastError() {
