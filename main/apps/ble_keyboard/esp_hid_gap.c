@@ -564,6 +564,40 @@ static void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_p
         ESP_LOGV(TAG, "BLE GAP ADV_START_COMPLETE");
         break;
 
+    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
+        ESP_LOGI(TAG,
+                 "BLE conn params status=%d interval=%u(1.25ms) "
+                 "latency=%u timeout=%u(10ms)",
+                 param->update_conn_params.status,
+                 param->update_conn_params.conn_int,
+                 param->update_conn_params.latency,
+                 param->update_conn_params.timeout);
+        // macOS may later reduce the supervision timeout to 720 ms. On the
+        // single-core C6 that makes an otherwise recoverable scheduling/radio
+        // hiccup look like a dead peripheral. Correct each completed short
+        // update once; the 6-second result does not recurse into this branch.
+        if (param->update_conn_params.status == ESP_BT_STATUS_SUCCESS &&
+            param->update_conn_params.timeout < 400) {
+            esp_ble_conn_update_params_t stable_params = {0};
+            memcpy(stable_params.bda,
+                   param->update_conn_params.bda,
+                   sizeof(esp_bd_addr_t));
+            stable_params.min_int = 0x000C;  // 15 ms
+            stable_params.max_int = 0x0018;  // 30 ms
+            stable_params.latency = 0;
+            stable_params.timeout = 600;     // 6 seconds
+            esp_err_t err = esp_ble_gap_update_conn_params(&stable_params);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "stable BLE parameter request failed: %s",
+                         esp_err_to_name(err));
+            } else {
+                ESP_LOGI(TAG,
+                         "requested stable BLE interval=15-30ms timeout=6s");
+            }
+        }
+        break;
+
     /*
      * AUTHENTICATION
      * */
@@ -664,8 +698,8 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
         .set_scan_rsp = false,
         .include_name = true,
         .include_txpower = true,
-        .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
-        .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
+        .min_interval = 0x000C, // preferred minimum = 15 ms
+        .max_interval = 0x0018, // preferred maximum = 30 ms
         .appearance = appearance,
         .manufacturer_len = 0,
         .p_manufacturer_data =  NULL,
@@ -770,7 +804,7 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
     fields.flags = BLE_HS_ADV_F_DISC_GEN |
                    BLE_HS_ADV_F_BREDR_UNSUP;
 
-    fields.appearance = ESP_HID_APPEARANCE_GENERIC;
+    fields.appearance = appearance;
     fields.appearance_is_present = 1;
 
     /* Indicate that the TX power level field should be included; have the
@@ -794,9 +828,9 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
     fields.uuids16_is_complete = 1;
 
     /* Initialize the security configuration */
-    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_DISP_ONLY;
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
     ble_hs_cfg.sm_bonding = 1;
-    ble_hs_cfg.sm_mitm = 1;
+    ble_hs_cfg.sm_mitm = 0;
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ID | BLE_SM_PAIR_KEY_DIST_ENC;
     ble_hs_cfg.sm_their_key_dist |= BLE_SM_PAIR_KEY_DIST_ID | BLE_SM_PAIR_KEY_DIST_ENC;
@@ -817,6 +851,33 @@ nimble_hid_gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGI(TAG, "connection %s; status=%d",
                 event->connect.status == 0 ? "established" : "failed",
                 event->connect.status);
+        if (event->connect.status == 0) {
+            const struct ble_gap_upd_params stable_params = {
+                .itvl_min = 0x000C,            // 15 ms
+                .itvl_max = 0x0018,            // 30 ms
+                .latency = 0,
+                .supervision_timeout = 600,    // 6 seconds
+                .min_ce_len = 0,
+                .max_ce_len = 0,
+            };
+            rc = ble_gap_update_params(
+                event->connect.conn_handle, &stable_params);
+            if (rc != 0) {
+                ESP_LOGW(TAG,
+                         "NimBLE stable parameter request failed: %d",
+                         rc);
+            }
+            /* HID pairing must become an encrypted, bonded connection. Without
+             * an explicit security request macOS can hold a temporary GATT
+             * link while its UI spins, then terminate it without saving the
+             * keyboard/mouse. Level 2 remains Just Works: no PIN or MITM. */
+            rc = ble_gap_security_initiate(event->connect.conn_handle);
+            if (rc != 0 && rc != BLE_HS_EALREADY) {
+                ESP_LOGW(TAG,
+                         "NimBLE security request failed: %d",
+                         rc);
+            }
+        }
         return 0;
         break;
     case BLE_GAP_EVENT_DISCONNECT:
@@ -867,12 +928,15 @@ nimble_hid_gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_TX:
-        MODLOG_DFLT(INFO, "notify_tx event; conn_handle=%d attr_handle=%d "
-                "status=%d is_indication=%d",
-                event->notify_tx.conn_handle,
-                event->notify_tx.attr_handle,
-                event->notify_tx.status,
-                event->notify_tx.indication);
+        if (event->notify_tx.status != 0) {
+            ESP_LOGW(TAG,
+                     "notify_tx failed; conn_handle=%d attr_handle=%d "
+                     "status=%d is_indication=%d",
+                     event->notify_tx.conn_handle,
+                     event->notify_tx.attr_handle,
+                     event->notify_tx.status,
+                     event->notify_tx.indication);
+        }
         return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -931,8 +995,6 @@ esp_err_t esp_hid_ble_gap_adv_start(void)
 {
     int rc;
     struct ble_gap_adv_params adv_params;
-    /* maximum possible duration for hid device(180s) */
-    int32_t adv_duration_ms = 180000;
 
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
@@ -945,7 +1007,10 @@ esp_err_t esp_hid_ble_gap_adv_start(void)
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
     adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(30);/* Recommended interval 30ms to 50ms */
     adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(50);
-    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, adv_duration_ms,
+    /* A keyboard must remain discoverable until a host connects. The
+     * upstream HID example uses a 180-second demo timeout, which makes the
+     * device disappear permanently if the user pairs after that window. */
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
                            &adv_params, nimble_hid_gap_event, NULL);
     if (rc != 0) {
         MODLOG_DFLT(ERROR, "error enabling advertisement; rc=%d\n", rc);

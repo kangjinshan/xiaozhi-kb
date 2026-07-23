@@ -1,12 +1,12 @@
 # XiaoZhi KB 协作开发指南
 
-> 最后更新：2026-07-12
+> 最后更新：2026-07-23
 
 ## 1. 系统概述
 
-本仓库基于小智 ESP32 开源固件，主要适配 `Waveshare ESP32-C6-Touch-AMOLED-2.16`。固件通过 NVS 在四种启动模式间分派：应用选择器、小智语音、BLE HID 键盘和金山 AI 语音助手（内部模式名仍为 recorder）。
+本仓库基于小智 ESP32 开源固件，主要适配 `Waveshare ESP32-C6-Touch-AMOLED-2.16`。固件通过 NVS 在四种启动模式间分派：应用选择器、小智语音、BLE HID 键盘/陀螺仪空鼠和金山 AI 语音助手（内部模式名仍为 recorder）。
 
-核心技术栈为 C/C++、ESP-IDF 5.5.3、FreeRTOS、LVGL、Bluedroid BLE HID、FATFS/SDSPI、ESP-SR 和 NVS。目标芯片是 ESP32-C6，默认分区表为 `partitions/v2/16m_c3.csv`。
+核心技术栈为 C/C++、ESP-IDF 5.5.3、FreeRTOS、LVGL、Apache NimBLE HID、FATFS/SDSPI、ESP-SR 和 NVS。目标芯片是 ESP32-C6，默认分区表为 `partitions/v2/16m_c3.csv`。
 
 ## 2. 目录导航
 
@@ -36,10 +36,10 @@
   - 入口：`Application::Initialize()` / `Application::Run()`（`main/application.cc`）
   - 板级初始化：`WaveshareEsp32c6TouchAMOLED2inch16` 构造函数
   - 副作用：启动 AMOLED、触摸、音频、Wi-Fi 和协议任务。
-- **BLE HID 键盘**
+- **BLE HID 键盘与空鼠**
   - 入口：`RunKeyboardApp()`（`main/apps/ble_keyboard/keyboard_app.cc`）
-  - 核心逻辑：`BleHidKeyboard::Init()`、`KeyboardTouchArrows`
-  - 副作用：广播 `XiaoZhi KB`，发送键盘报告；配置 2 可切换触区图。
+  - 核心逻辑：`BleHidKeyboard::Init()`、`KeyboardTouchArrows`、`AirMouseMotion`
+  - 副作用：广播 `XiaoZhi KB`；同一 HID report map 用 Report ID 1 发送九宫格触摸键盘、Report ID 2 发送相对鼠标。所有历史键盘 profile 在运行时统一为配置 2，直接复用 I2C0 上的 QMI8658，BLE 连接期间持续发送空鼠位移；启动时自动点亮九宫格提示屏，BOOT/GPIO10 为鼠标左/右键，PWR 短按 IRQ 或松键沿切换亮屏/暗屏，不存在独立空鼠配置。
 - **金山 AI 助手交互、录音和回放**
   - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
   - 核心逻辑：`RecorderBuildAssistantUi()`、`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
@@ -64,8 +64,18 @@
 ## 4. 全局设计约束
 
 - 固定使用 ESP-IDF 5.5.3 和 `esp32c6`；干净构建必须保留 `CONFIG_BOARD_TYPE_WAVESHARE_ESP32_C6_TOUCH_AMOLED_2_16=y`。
-- GPIO12/GPIO13 是 USB D-/D+，禁止配置为普通 GPIO。GPIO9 是 BOOT，GPIO10 是左键；中间 PWR 键属于 AXP2101，不是普通 GPIO。
-- AMOLED 与 SD 卡共用 SPI2（GPIO0/1/2，独立 CS）。禁止在 LVGL 刷新未暂停时初始化 SDSPI 或执行录音模式的大块 SD I/O。
+- GPIO12/GPIO13 是 USB D-/D+，禁止配置为普通 GPIO。GPIO9 的 BOOT 是鼠标左键，GPIO10 是鼠标右键；中间 PWR 键属于 AXP2101，不是普通 GPIO。
+- 键鼠配置 2 的 QMI8658（地址 `0x6B`）必须复用键盘触摸初始化的 I2C0（GPIO8 SDA / GPIO7 SCL），不得再创建第二条同引脚 I2C 总线。SensorLib 固定到 commit `baa3e0b83c256b74d9870a95d96d55595946926c`，升级前要重新验证新 I2C API、动态零偏校准和 C6 构建。
+- BLE HID 描述符变化后，macOS 可能继续缓存旧的纯键盘描述符；真机验证前先在蓝牙设置中忽略 `XiaoZhi KB` 再重新配对。鼠标移动与按键报告共用短时互斥，禁止在持锁期间延时或执行 IMU/I2C 访问。
+- 键鼠模式同样禁止安装 `SdCardLogStart()`：BLE GAP/HID 事件任务不得同步等待 FATFS/SPI，否则会造成 supervision timeout（HCI reason `0x08`）和输入假死。SD 可以保持挂载，日志只走 USB 串口。
+- BLE HID 必须使用 ESP-IDF 的 Apache NimBLE 后端，保持通知路径非阻塞；`esp_hid_gap.c` 在连接后请求 15–30 ms interval 和 6 s supervision timeout。空鼠报告固定为 50 Hz，报告发送暂时失败时至少退避 100 ms，禁止切回 Bluedroid 的同步 GATTS 通知路径或恢复为每 tick 重试和错误日志风暴。
+- NimBLE HID 广播必须使用 `BLE_HS_FOREVER` 持续到连接建立，不能恢复 ESP-IDF HID 示例的 180 秒演示超时；断开连接后必须重新进入可发现状态。
+- `esp_hidd_dev_init()` 注册完 NimBLE HID 的 `ble_hs_cfg` 回调后，必须调用 `ble_store_config_init()`、设置 `ble_hs_cfg.store_status_cb` 并用 `esp_nimble_enable()` 启动 Host task；仅调用 `esp_nimble_init()` 不会运行 Host，因而不会触发 `ESP_HIDD_START_EVENT` 或发出任何广播。
+- NimBLE GAP service name、广播名和 HID 配置名必须统一为 `XiaoZhi KB`；不能保留 sdkconfig 默认的 `nimble`，否则 macOS 扫描时显示 `XiaoZhi KB`、连接后却登记成另一台 `nimble` 设备。NimBLE Host 日志保持 Warning，禁止为每个 50 Hz mouse notify 输出 INFO。
+- NimBLE HID 必须使用 Security Mode 1 Level 2、Just Works bonding 和 NVS bond 持久化，并在 `BLE_GAP_EVENT_CONNECT` 后调用 `ble_gap_security_initiate()`；Level 0 只会让 macOS 建立临时 GATT 链路，蓝牙设置持续转圈后由主机以 HCI `0x13` 主动断开。
+- AMOLED 与 SD 卡共用 SPI2（GPIO0/1/2，独立 CS）。键鼠模式必须先按 AMOLED 最大传输尺寸创建总线，再由 SD 复用；不得让 SD 以 4 KiB 上限先创建总线。所有 SH8601 LVGL 显示路径都必须注册刷新区域偶数起点/奇数终点回调。禁止在 LVGL 刷新未暂停时初始化 SDSPI 或执行录音模式的大块 SD I/O。
+- 键鼠 PWR 息屏必须停止 LVGL 并持续持有显示锁；亮屏时先开启 SH8601、在锁内重建并 invalidate 九宫格，再解锁、恢复 LVGL 并唤醒任务。禁止在面板关闭期间继续提交刷新帧。
+- 触摸任务读取/清除 PWR IRQ 后必须先释放共享 I2C0 锁，再切换 SH8601/LVGL；只有首次显示上电所需的 PMIC 寄存器事务可以由显示模块短暂取得该锁。
 - 金山 AI 模式的 AXP2101 PMIC 轮询任务只能向 Recorder 请求队列发布 PWR 事件，禁止直接调用 SH8601、LVGL、SD、codec 或网络；息屏 pause 必须与现有 SD pause 正确嵌套。
 - 小智模式禁止调用 `SdCardLogStart()`：`sys_evt` 栈只有 2304 字节，`SdCardLogVprintf()` 同步执行 `vsnprintf`、FATFS 和 `fwrite` 会触发栈保护故障。录音模式同样禁止启用该 hook，以免日志写卡与刷屏争用 SPI2。
 - SD 卡仍可在小智和录音模式挂载；禁用的是同步日志落盘，不是文件读写。小智/录音日志走 USB 串口。
@@ -95,7 +105,7 @@
 - 新增或调整应用模式：`main/apps/app_mode.*`、`main/main.cc`、`main/apps/app_selector.cc`。
 - 调整目标板引脚或初始化顺序：目标板目录的 `config.h` 和 `.cc`；先检查 SPI2、I2C0、USB 引脚冲突。
 - 修改金山 AI UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增固定中文前更新字体子集和展示模型测试；修改动态历史文本时同时运行 `recorder_playback_menu_test.cc`、`recorder_history_layout_test.cc` 与 `recorder_common_font_test.cc`。
-- 修改键盘触区：`main/apps/ble_keyboard/keyboard_touch_action.*`、`keyboard_touch_arrows.*`。
+- 修改键盘触区或空鼠：`main/apps/ble_keyboard/keyboard_touch_action.*`、`keyboard_touch_arrows.*`、`air_mouse_motion.*`、`one_euro_filter.*`。空鼠正常移动直接映射陀螺仪角速度，不引入 Madgwick 绝对姿态；板级轴向/符号集中在 `AirMouseTask()` 两行映射处，真机调整时同时检查静止漂移、慢速抖动、快速延迟，以及 BLE 断开后立即停止并清空残余位移。
 - 修改 SD 日志：`main/sdcard/sdcard_log.cc`；若要在系统任务中使用，必须先改为独立日志任务和有界队列，不能简单增大 `sys_evt` 栈掩盖同步 I/O。
 
 ## 6. AGENTS 维护规则

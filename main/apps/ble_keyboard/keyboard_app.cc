@@ -6,66 +6,97 @@
 #include "config.h"
 #include "ble_hid_keyboard.h"
 #include "keyboard_touch_arrows.h"
+#include "keyboard_zone_display.h"
 #include "app_mode.h"
 #include "sdcard.h"
-#include "sdcard_log.h"
 
 #define TAG "keyboard_app"
 
 // 蓝牙键盘应用：两个物理键
-//   最左键 GPIO10：按住 = 右 Option（松开释放）
-//   最右键 GPIO9 (BOOT)：配置1单击=回车；配置2单击=触区图/黑屏切换
-//   中间 PWR：配置1单击=退格；配置2单击=Tab（通过 AXP2101 短按 IRQ 识别）
+//   配置1保留旧键盘行为。
+//   菜单使用的配置2同时启用触摸键盘和空鼠：GPIO9/GPIO10 为鼠标
+//   左/右键，中间 PWR 切换屏幕亮屏/暗屏。
 void RunKeyboardApp() {
-    // ==== 分段诊断：先确认无BLE时日志正常，再测Init ====
-    for (int i = 0; i < 5; i++) {
-        ESP_LOGW(TAG, "DIAG before Init, tick=%d", i);
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    ESP_LOGW(TAG, "DIAG === calling BleHidKeyboard::Init() now ===");
-
     auto& kb = BleHidKeyboard::GetInstance();
     const KeyboardProfile profile = KeyboardProfileRead();
     kb.Init();
-    StartKeyboardTouchArrows(kb, profile);
 
-    // 键盘模式无屏幕，SPI2_HOST 总线空闲，自建总线挂载 SD 卡（own_spi_bus=true）。
-    SdCardMount(true);
-    SdCardLogStart();  // SD 卡就绪后启用日志落盘
-
-    ESP_LOGW(TAG, "DIAG === Init() returned OK ===");
-    for (int i = 0; i < 5; i++) {
-        ESP_LOGW(TAG, "DIAG after Init, tick=%d", i);
-        vTaskDelay(pdMS_TO_TICKS(500));
+    // AMOLED 与 SD 共用 SPI2。先按屏幕最大传输尺寸建立总线，再让 SD
+    // 复用；否则 SD 自建总线的 4 KiB 上限不足以承载 LVGL 刷新。
+    esp_err_t display_bus_err = KeyboardZoneDisplayPrepareSharedSpiBus();
+    if (display_bus_err == ESP_OK) {
+        SdCardMount(false);
+    } else {
+        ESP_LOGW(TAG,
+                 "display SPI bus prepare failed: %s",
+                 esp_err_to_name(display_bus_err));
+        SdCardMount(true);
     }
 
-    // 最左键：按住 = 右 Option
-    static Button left(KEY_LEFT_GPIO);
-    left.OnPressDown([&kb]() { kb.SendModifier(HID_MOD_RIGHT_ALT, true); });
-    left.OnPressUp([&kb]()  { kb.SendModifier(HID_MOD_RIGHT_ALT, false); });
+    StartKeyboardTouchArrows(kb, profile);
+    // Do not install the synchronous SD log hook in HID mode. BLE host/event
+    // callbacks also emit logs; making those callbacks wait for FATFS/SPI can
+    // starve the controller until the supervision timeout expires.
 
-    // 最右键（BOOT）：配置1单击=回车；配置2单击=触区图/黑屏切换。
-    static Button right(BOOT_BUTTON_GPIO);
-    right.OnClick([&kb, profile]() {
+    // 最左键 GPIO10：配置2为鼠标右键，配置1仍为右 Option。
+    static Button left(KEY_LEFT_GPIO);
+    left.OnPressDown([&kb, profile]() {
         if (profile == KeyboardProfile::kProfile2) {
-            ShowKeyboardTouchZoneGuide();
-            return;
+            kb.SendMouseButton(HID_MOUSE_BUTTON_RIGHT, true);
+        } else {
+            kb.SendModifier(HID_MOD_RIGHT_ALT, true);
         }
-        kb.TapKey(HID_KEY_ENTER);
     });
+    left.OnPressUp([&kb, profile]() {
+        if (profile == KeyboardProfile::kProfile2) {
+            kb.SendMouseButton(HID_MOUSE_BUTTON_RIGHT, false);
+        } else {
+            kb.SendModifier(HID_MOD_RIGHT_ALT, false);
+        }
+    });
+
+    // 最右键（BOOT）：配置2为鼠标左键；配置1仍发送回车。
+    static Button right(BOOT_BUTTON_GPIO);
+    if (profile == KeyboardProfile::kProfile2) {
+        right.OnPressDown([&kb]() {
+            kb.SendMouseButton(HID_MOUSE_BUTTON_LEFT, true);
+        });
+        right.OnPressUp([&kb]() {
+            kb.SendMouseButton(HID_MOUSE_BUTTON_LEFT, false);
+        });
+    } else {
+        right.OnClick([&kb]() {
+            kb.TapKey(HID_KEY_ENTER);
+        });
+    }
 
     kb.SetConnectionCallback([](bool c) {
         ESP_LOGI(TAG, "BLE %s", c ? "connected" : "disconnected");
     });
 
-    ESP_LOGI(TAG,
-             "keyboard app running (profile=%d, left=Right Option, boot=%s, pwr=%s)",
-             static_cast<int>(profile),
-             profile == KeyboardProfile::kProfile2 ? "Zone Guide" : "Enter",
-             profile == KeyboardProfile::kProfile2 ? "Tab" : "Backspace");
+    if (profile == KeyboardProfile::kProfile2) {
+        ESP_LOGI(TAG,
+                 "keyboard+air-mouse running (gyro=always-on while connected, "
+                 "boot=Mouse Left, gpio10=Mouse Right, "
+                 "pwr=Screen Toggle)");
+    } else {
+        ESP_LOGI(TAG,
+                 "keyboard app running (profile=%d, left=Right Option, "
+                 "boot=Enter, pwr=Backspace)",
+                 static_cast<int>(profile));
+    }
     uint32_t heartbeat = 0;
     while (true) {
-        ESP_LOGI(TAG, "keyboard heartbeat #%lu connected=%d", heartbeat++, kb.IsConnected());
+        ESP_LOGI(TAG,
+                 "keyboard heartbeat #%lu connected=%d advertising=%d "
+                 "display_init=%d "
+                 "display_on=%d display_err=%s",
+                 heartbeat++,
+                 kb.IsConnected(),
+                 kb.IsAdvertising(),
+                 KeyboardZoneDisplayInitialized(),
+                 KeyboardAirMouseDisplayIsOn(),
+                 esp_err_to_name(KeyboardZoneDisplayLastError()));
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }

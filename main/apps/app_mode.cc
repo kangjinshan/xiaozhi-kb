@@ -43,23 +43,29 @@ KeyboardProfile KeyboardProfileRead() {
     nvs_handle_t h;
     esp_err_t oerr = nvs_open(kNs, NVS_READONLY, &h);
     if (oerr != ESP_OK) {
-        return KeyboardProfile::kProfile1;
+        ESP_LOGW(TAG,
+                 "keyboard profile unavailable; using unified keyboard+mouse profile");
+        return KeyboardProfile::kProfile2;
     }
 
-    int32_t value = 1;
+    int32_t value = static_cast<int32_t>(KeyboardProfile::kProfile2);
     esp_err_t err = nvs_get_i32(h, KeyboardProfileNvsKey(), &value);
     nvs_close(h);
 
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "keyboard profile read failed: %s, default profile1", esp_err_to_name(err));
-        return KeyboardProfile::kProfile1;
-    }
-    if (value == static_cast<int32_t>(KeyboardProfile::kProfile2)) {
-        ESP_LOGI(TAG, "keyboard profile=2");
+        ESP_LOGW(TAG,
+                 "keyboard profile read failed: %s; using unified keyboard+mouse profile",
+                 esp_err_to_name(err));
         return KeyboardProfile::kProfile2;
     }
-    ESP_LOGI(TAG, "keyboard profile=1");
-    return KeyboardProfile::kProfile1;
+    if (value != static_cast<int32_t>(KeyboardProfile::kProfile2)) {
+        ESP_LOGW(TAG,
+                 "legacy keyboard profile=%ld migrated at runtime to keyboard+mouse",
+                 static_cast<long>(value));
+    } else {
+        ESP_LOGI(TAG, "keyboard profile=2 (keyboard+mouse)");
+    }
+    return KeyboardProfile::kProfile2;
 }
 
 static void KeyboardProfileWrite(nvs_handle_t h, KeyboardProfile profile) {

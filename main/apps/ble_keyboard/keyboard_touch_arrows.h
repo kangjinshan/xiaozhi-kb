@@ -6,6 +6,5 @@
 class BleHidKeyboard;
 
 void StartKeyboardTouchArrows(BleHidKeyboard& keyboard, KeyboardProfile profile);
-void ShowKeyboardTouchZoneGuide();
 
 #endif  // KEYBOARD_TOUCH_ARROWS_H_
