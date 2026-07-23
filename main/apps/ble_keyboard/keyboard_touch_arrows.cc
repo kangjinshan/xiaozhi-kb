@@ -1,22 +1,20 @@
 #include "keyboard_touch_arrows.h"
 
 #include "app_mode.h"
-#include "air_mouse_motion.h"
 #include "ble_hid_keyboard.h"
 #include "config.h"
 #include "keyboard_touch_action.h"
 #include "keyboard_pmic_power_key.h"
 #include "keyboard_zone_display.h"
+#include "touchpad_motion.h"
 
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <esp_err.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
-#include <sensor/imu/qmi8658/SensorQMI8658.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -30,10 +28,6 @@ constexpr uint32_t kRepeatMs = 120;
 constexpr uint32_t kTouchReadWarnMs = 1000;
 constexpr uint32_t kPmicReadWarnMs = 1000;
 constexpr uint32_t kSelectorHoldMs = 2000;
-// CONFIG_FREERTOS_HZ=100, so use two full ticks. This caps mouse notifications
-// at 50 Hz and leaves room for the controller/GATT confirmation path.
-constexpr uint32_t kAirMousePollMs = 20;
-constexpr uint32_t kAirMouseReadWarnMs = 1000;
 constexpr uint8_t kAxp2101Address = 0x34;
 constexpr uint8_t kAxp2101Irq1StatusReg = 0x48;
 constexpr uint8_t kAxp2101Irq2EnableReg = 0x41;
@@ -55,8 +49,7 @@ struct TouchArrowContext {
     SemaphoreHandle_t i2c_mutex;
 };
 
-SensorQMI8658 s_air_mouse_imu;
-AirMouseMotion s_air_mouse_motion;
+TouchpadMotion s_touchpad_motion;
 
 struct KeyboardTouchSample {
     bool touched = false;
@@ -139,95 +132,10 @@ void ReleaseModifiersIfNeeded(TouchArrowContext* context,
 const char* KeyboardProfileName(KeyboardProfile profile) {
     switch (profile) {
         case KeyboardProfile::kProfile2:
-            return "profile2_keyboard_air_mouse";
+            return "profile2_keyboard_touchpad";
         case KeyboardProfile::kProfile1:
         default:
             return "profile1";
-    }
-}
-
-bool InitializeAirMouseImu(i2c_master_bus_handle_t i2c_bus) {
-    if (!s_air_mouse_imu.begin(i2c_bus, QMI8658_L_SLAVE_ADDRESS)) {
-        ESP_LOGE(TAG, "QMI8658 not found at 0x%02x", QMI8658_L_SLAVE_ADDRESS);
-        return false;
-    }
-
-    const bool accel_configured = s_air_mouse_imu.configAccel(
-        AccelFullScaleRange::FS_2G,
-        224.0f,
-        SensorQMI8658::LpfMode::MODE_3);
-    const bool gyro_configured = s_air_mouse_imu.configGyro(
-        GyroFullScaleRange::FS_1000_DPS,
-        224.0f,
-        SensorQMI8658::LpfMode::MODE_3);
-    const bool accel_enabled = s_air_mouse_imu.enableAccel();
-    const bool gyro_enabled = s_air_mouse_imu.enableGyro();
-    if (!accel_configured || !gyro_configured ||
-        !accel_enabled || !gyro_enabled) {
-        ESP_LOGE(TAG,
-                 "QMI8658 configure failed: accel_cfg=%d gyro_cfg=%d "
-                 "accel_en=%d gyro_en=%d",
-                 accel_configured,
-                 gyro_configured,
-                 accel_enabled,
-                 gyro_enabled);
-        return false;
-    }
-
-    // SensorLib uses accelerometer and gyro variance to refresh gyro bias only
-    // while the device is stationary. This avoids a mandatory motionless boot.
-    s_air_mouse_imu.enableDynamicGyroCalibration(true);
-    ESP_LOGI(TAG,
-             "QMI8658 air mouse ready (addr=0x%02x, odr=224Hz, task=50Hz)",
-             QMI8658_L_SLAVE_ADDRESS);
-    return true;
-}
-
-void AirMouseTask(void* arg) {
-    auto* context = static_cast<TouchArrowContext*>(arg);
-    TickType_t last_wake = xTaskGetTickCount();
-    TickType_t last_warning_tick = 0;
-    bool warning_logged = false;
-
-    while (true) {
-        GyroscopeData gyro = {};
-        xSemaphoreTake(context->i2c_mutex, portMAX_DELAY);
-        const bool gyro_read = s_air_mouse_imu.readGyro(gyro);
-        xSemaphoreGive(context->i2c_mutex);
-        if (!gyro_read) {
-            const TickType_t now = xTaskGetTickCount();
-            if (!warning_logged ||
-                now - last_warning_tick >= pdMS_TO_TICKS(kAirMouseReadWarnMs)) {
-                ESP_LOGW(TAG, "QMI8658 gyro read failed");
-                warning_logged = true;
-                last_warning_tick = now;
-            }
-            s_air_mouse_motion.Reset();
-        } else {
-            if (warning_logged) {
-                ESP_LOGI(TAG, "QMI8658 gyro read recovered");
-                warning_logged = false;
-                last_warning_tick = 0;
-            }
-
-            // Board-space mapping for holding the screen upright, facing the
-            // user, while the pointing ray goes out through the back (-Z).
-            // Pointing right is -Y yaw and pointing down is -X pitch. Z is
-            // roll around the screen normal and must not move the cursor.
-            const float horizontal_dps = gyro.dps.y;
-            const float vertical_dps = gyro.dps.x;
-            const bool active = context->keyboard->IsConnected();
-            const AirMouseDelta delta = s_air_mouse_motion.Update(
-                horizontal_dps,
-                vertical_dps,
-                static_cast<uint64_t>(esp_timer_get_time()),
-                active);
-            if (delta.HasMovement()) {
-                context->keyboard->SendMouseMove(delta.x, delta.y);
-            }
-        }
-
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(kAirMousePollMs));
     }
 }
 
@@ -347,7 +255,7 @@ esp_err_t ReadKeyboardTouch(TouchHardware* hardware,
         return err;
     }
 
-    // SensorLib treats 0xAB in byte 0 as the controller's idle frame.
+    // CST9217 uses 0xAB in byte 0 as its idle frame.
     if (data[0] == kCst9217Ack || data[0] == 0x00) {
         return ESP_OK;
     }
@@ -553,14 +461,16 @@ void TouchArrowTask(void* arg) {
     bool power_key_short_latched = true;
     bool right_option_pressed = false;
     bool left_command_pressed = false;
+    bool last_display_on = KeyboardInputModeDisplayIsOn();
+    bool suppress_touch_until_release = false;
 
     while (true) {
         const TickType_t now = xTaskGetTickCount();
         uint8_t power_key_hid_to_tap = 0;
         bool display_toggle_requested = false;
 
-        // Keep the PMIC + complete CST9217 read/ACK polling group atomic
-        // against QMI8658 accesses on the shared I2C0 bus.
+        // Keep the PMIC + complete CST9217 read/ACK polling group atomic on
+        // the shared I2C0 bus.
         xSemaphoreTake(context->i2c_mutex, portMAX_DELAY);
         PollPowerKeyShortcut(
             context,
@@ -603,20 +513,73 @@ void TouchArrowTask(void* arg) {
 
         // BLE/HID work must not hold the shared bus lock.
         if (display_toggle_requested) {
-            const esp_err_t display_err = KeyboardAirMouseDisplayToggle(
+            const esp_err_t display_err = KeyboardInputModeDisplayToggle(
                 context->hardware.pmic, context->i2c_mutex);
             if (display_err != ESP_OK) {
                 ESP_LOGW(TAG,
-                         "air mouse display toggle failed: %s",
+                         "input mode display toggle failed: %s",
                          esp_err_to_name(display_err));
             } else {
-                ESP_LOGI(TAG, "air mouse display toggled");
+                ESP_LOGI(TAG, "input mode display toggled");
             }
         }
 
         if (power_key_hid_to_tap != 0) {
             context->keyboard->TapKey(power_key_hid_to_tap);
         }
+
+        const bool display_on = KeyboardInputModeDisplayIsOn();
+        if (display_on != last_display_on) {
+            ReleaseModifiersIfNeeded(
+                context, &right_option_pressed, &left_command_pressed);
+            s_touchpad_motion.Reset();
+            last_tap_action = KeyboardTouchAction::kNone;
+            last_send_tick = 0;
+            blocked_by_disconnect = false;
+            selector_hold_start_tick = 0;
+            selector_hold_logged = false;
+            suppress_touch_until_release = touch_sample.touched;
+            last_display_on = display_on;
+            ESP_LOGI(TAG,
+                     "touch input mode=%s",
+                     display_on ? "mouse" : "keyboard");
+        }
+
+        // A finger held across a PWR mode transition must not become an
+        // accidental key press or a large pointer jump. Resume only after the
+        // contact has been lifted once.
+        if (suppress_touch_until_release) {
+            if (!touch_sample.touched) {
+                suppress_touch_until_release = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(kTouchPollMs));
+            continue;
+        }
+
+        if (display_on) {
+            ReleaseModifiersIfNeeded(
+                context, &right_option_pressed, &left_command_pressed);
+            last_tap_action = KeyboardTouchAction::kNone;
+            last_send_tick = 0;
+            blocked_by_disconnect = false;
+            selector_hold_start_tick = 0;
+            selector_hold_logged = false;
+
+            const TouchpadDelta delta = s_touchpad_motion.Update(
+                touch_sample.x,
+                touch_sample.y,
+                touch_sample.touched,
+                context->keyboard->IsConnected());
+            if (delta.HasMovement()) {
+                context->keyboard->SendMouseMove(delta.x, delta.y);
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(kTouchPollMs));
+            continue;
+        }
+
+        // Dark-screen mode keeps the existing touch-zone keyboard behavior.
+        s_touchpad_motion.Reset();
 
         if (action == KeyboardTouchAction::kSelector) {
             ReleaseModifiersIfNeeded(context, &right_option_pressed, &left_command_pressed);
@@ -726,7 +689,7 @@ void StartKeyboardTouchArrows(BleHidKeyboard& keyboard, KeyboardProfile profile)
 
     if (profile == KeyboardProfile::kProfile2) {
         const esp_err_t display_err =
-            KeyboardAirMouseDisplayToggle(
+            KeyboardInputModeDisplayToggle(
                 context.hardware.pmic, context.i2c_mutex);
         if (display_err != ESP_OK) {
             ESP_LOGW(TAG,
@@ -735,13 +698,6 @@ void StartKeyboardTouchArrows(BleHidKeyboard& keyboard, KeyboardProfile profile)
         } else {
             ESP_LOGI(TAG, "initial keyboard display on");
         }
-    }
-
-    bool air_mouse_ready = false;
-    if (profile == KeyboardProfile::kProfile2) {
-        xSemaphoreTake(context.i2c_mutex, portMAX_DELAY);
-        air_mouse_ready = InitializeAirMouseImu(context.hardware.i2c_bus);
-        xSemaphoreGive(context.i2c_mutex);
     }
 
     BaseType_t task_ok = xTaskCreate(
@@ -756,15 +712,7 @@ void StartKeyboardTouchArrows(BleHidKeyboard& keyboard, KeyboardProfile profile)
     }
 
     started = true;
-    if (air_mouse_ready) {
-        BaseType_t air_mouse_task_ok = xTaskCreate(
-            AirMouseTask, "air_mouse", 4096, &context, 6, nullptr);
-        if (air_mouse_task_ok != pdPASS) {
-            ESP_LOGE(TAG, "failed to create air mouse task");
-        }
-    } else if (profile == KeyboardProfile::kProfile2) {
-        ESP_LOGW(TAG,
-                 "air mouse disabled; BLE keyboard and touch selector remain active");
-    }
-    ESP_LOGI(TAG, "touch actions started (%s)", KeyboardProfileName(profile));
+    ESP_LOGI(TAG,
+             "touch input started (%s, bright=mouse dark=keyboard)",
+             KeyboardProfileName(profile));
 }

@@ -1,8 +1,5 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  SensorLib:
-    git: https://github.com/lewisxhe/SensorLib.git
-    version: baa3e0b83c256b74d9870a95d96d55595946926c
   waveshare/esp_lcd_sh8601: 1.0.2
   espressif/esp_lcd_co5300: ^2.0.3
   espressif/esp_lcd_ili9341: ==1.2.0

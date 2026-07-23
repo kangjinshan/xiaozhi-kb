@@ -8,10 +8,11 @@
 
 esp_err_t KeyboardZoneDisplayPrepareSharedSpiBus();
 esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic);
-esp_err_t KeyboardAirMouseDisplayToggle(i2c_master_dev_handle_t pmic,
-                                        SemaphoreHandle_t i2c_mutex = nullptr);
+esp_err_t KeyboardInputModeDisplayToggle(
+    i2c_master_dev_handle_t pmic,
+    SemaphoreHandle_t i2c_mutex = nullptr);
 bool KeyboardZoneDisplayInitialized();
-bool KeyboardAirMouseDisplayIsOn();
+bool KeyboardInputModeDisplayIsOn();
 esp_err_t KeyboardZoneDisplayLastError();
 
 #endif  // KEYBOARD_ZONE_DISPLAY_H_
