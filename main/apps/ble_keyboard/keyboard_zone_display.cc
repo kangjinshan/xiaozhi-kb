@@ -26,7 +26,11 @@ constexpr uint8_t kAxp2101Aldo3Mask = 0x04;
 
 bool s_display_initialized = false;
 bool s_guide_visible = false;
+bool s_air_mouse_display_on = false;
+bool s_display_refresh_paused = false;
 lv_display_t* s_display = nullptr;
+esp_lcd_panel_handle_t s_panel = nullptr;
+esp_err_t s_last_display_error = ESP_OK;
 
 static const sh8601_lcd_init_cmd_t kVendorInit[] = {
     {0x11, (uint8_t[]){0x00}, 0, 120},
@@ -43,6 +47,35 @@ static const sh8601_lcd_init_cmd_t kVendorInit[] = {
     {0x51, (uint8_t[]){0xFF}, 1, 0},
 };
 
+void OnInvalidateArea(lv_event_t* event) {
+    auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
+    if (area == nullptr) {
+        return;
+    }
+
+    // SH8601 QSPI transfers require an even start and odd end on both axes.
+    area->x1 = (area->x1 >> 1) << 1;
+    area->y1 = (area->y1 >> 1) << 1;
+    area->x2 = ((area->x2 >> 1) << 1) + 1;
+    area->y2 = ((area->y2 >> 1) << 1) + 1;
+}
+
+esp_err_t EnsureDisplaySpiBus() {
+    spi_bus_config_t buscfg = {};
+    buscfg.sclk_io_num = LCD_PCLK;
+    buscfg.data0_io_num = LCD_D0;
+    buscfg.data1_io_num = LCD_D1;
+    buscfg.data2_io_num = LCD_D2;
+    buscfg.data3_io_num = LCD_D3;
+    buscfg.max_transfer_sz = LCD_H_RES * LCD_V_RES * sizeof(uint16_t);
+    const esp_err_t err =
+        spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return ESP_OK;
+    }
+    return err;
+}
+
 esp_err_t WriteI2cReg(i2c_master_dev_handle_t device, uint8_t reg, uint8_t value) {
     const uint8_t buffer[2] = {reg, value};
     return i2c_master_transmit(device, buffer, sizeof(buffer), 100);
@@ -52,26 +85,44 @@ esp_err_t ReadI2cReg(i2c_master_dev_handle_t device, uint8_t reg, uint8_t* value
     return i2c_master_transmit_receive(device, &reg, sizeof(reg), value, sizeof(*value), 100);
 }
 
-esp_err_t ResetDisplayPower(i2c_master_dev_handle_t pmic) {
+esp_err_t ResetDisplayPower(i2c_master_dev_handle_t pmic,
+                            SemaphoreHandle_t i2c_mutex) {
+    if (i2c_mutex != nullptr &&
+        xSemaphoreTake(i2c_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
     uint8_t ldo_enable = 0;
     esp_err_t err = ReadI2cReg(pmic, kAxp2101LdoEnableReg, &ldo_enable);
     if (err != ESP_OK) {
+        if (i2c_mutex != nullptr) {
+            xSemaphoreGive(i2c_mutex);
+        }
         return err;
     }
 
     err = WriteI2cReg(pmic, kAxp2101LdoEnableReg, ldo_enable | kAxp2101Aldo3Mask);
     if (err != ESP_OK) {
+        if (i2c_mutex != nullptr) {
+            xSemaphoreGive(i2c_mutex);
+        }
         return err;
     }
     vTaskDelay(pdMS_TO_TICKS(100));
 
     err = WriteI2cReg(pmic, kAxp2101LdoEnableReg, ldo_enable & ~kAxp2101Aldo3Mask);
     if (err != ESP_OK) {
+        if (i2c_mutex != nullptr) {
+            xSemaphoreGive(i2c_mutex);
+        }
         return err;
     }
     vTaskDelay(pdMS_TO_TICKS(100));
 
     err = WriteI2cReg(pmic, kAxp2101LdoEnableReg, ldo_enable | kAxp2101Aldo3Mask);
+    if (i2c_mutex != nullptr) {
+        xSemaphoreGive(i2c_mutex);
+    }
     if (err != ESP_OK) {
         return err;
     }
@@ -79,20 +130,14 @@ esp_err_t ResetDisplayPower(i2c_master_dev_handle_t pmic) {
     return ESP_OK;
 }
 
-esp_err_t InitializeDisplay(i2c_master_dev_handle_t pmic) {
+esp_err_t InitializeDisplay(i2c_master_dev_handle_t pmic,
+                            SemaphoreHandle_t i2c_mutex = nullptr) {
     if (s_display_initialized) {
         return ESP_OK;
     }
 
-    spi_bus_config_t buscfg = {};
-    buscfg.sclk_io_num = LCD_PCLK;
-    buscfg.data0_io_num = LCD_D0;
-    buscfg.data1_io_num = LCD_D1;
-    buscfg.data2_io_num = LCD_D2;
-    buscfg.data3_io_num = LCD_D3;
-    buscfg.max_transfer_sz = LCD_H_RES * LCD_V_RES * sizeof(uint16_t);
-    esp_err_t err = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    esp_err_t err = EnsureDisplaySpiBus();
+    if (err != ESP_OK) {
         return err;
     }
 
@@ -123,7 +168,7 @@ esp_err_t InitializeDisplay(i2c_master_dev_handle_t pmic) {
         return err;
     }
 
-    err = ResetDisplayPower(pmic);
+    err = ResetDisplayPower(pmic, i2c_mutex);
     if (err != ESP_OK) {
         return err;
     }
@@ -174,7 +219,10 @@ esp_err_t InitializeDisplay(i2c_master_dev_handle_t pmic) {
         return ESP_FAIL;
     }
     lv_display_set_default(s_display);
+    lv_display_add_event_cb(
+        s_display, OnInvalidateArea, LV_EVENT_INVALIDATE_AREA, nullptr);
 
+    s_panel = panel;
     s_display_initialized = true;
     return ESP_OK;
 }
@@ -215,19 +263,14 @@ void AddCell(lv_obj_t* parent,
     lv_obj_center(label);
 }
 
-void DrawZoneGuide() {
-    if (!lvgl_port_lock(30000)) {
-        ESP_LOGW(TAG, "failed to lock lvgl");
-        return;
-    }
-
+void DrawZoneGuideLocked() {
     lv_obj_t* screen = lv_screen_active();
     lv_obj_clean(screen);
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x0F1115), 0);
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* title = lv_label_create(screen);
-    lv_label_set_text(title, "PROFILE 2 ZONES");
+    lv_label_set_text(title, "KEYBOARD + MOUSE");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &font_puhui_basic_20_4, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
@@ -255,6 +298,17 @@ void DrawZoneGuide() {
     AddCell(grid, "DOWN", lv_color_hex(0x1D3557), lv_color_hex(0x86B7FE), 1, 2);
     AddCell(grid, "OPT", lv_color_hex(0x4B3869), lv_color_hex(0xC7A4FF), 2, 2);
 
+    lv_obj_invalidate(screen);
+}
+
+void DrawZoneGuide() {
+    if (!lvgl_port_lock(30000)) {
+        ESP_LOGW(TAG, "failed to lock lvgl");
+        return;
+    }
+
+    DrawZoneGuideLocked();
+    lv_refr_now(s_display);
     lvgl_port_unlock();
 }
 
@@ -272,7 +326,55 @@ void DrawBlackScreen() {
     lvgl_port_unlock();
 }
 
+esp_err_t SetDisplayOn(bool on) {
+    if (s_panel == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = esp_lcd_panel_disp_on_off(s_panel, on);
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        return ESP_OK;
+    }
+    return err;
+}
+
+bool PauseDisplayRefresh() {
+    if (s_display_refresh_paused) {
+        return true;
+    }
+
+    esp_err_t err = lvgl_port_stop();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "failed to stop lvgl: %s", esp_err_to_name(err));
+    }
+    if (!lvgl_port_lock(30000)) {
+        ESP_LOGW(TAG, "failed to lock lvgl for screen off");
+        lvgl_port_resume();
+        return false;
+    }
+    s_display_refresh_paused = true;
+    return true;
+}
+
+void ResumeDisplayRefresh() {
+    if (!s_display_refresh_paused) {
+        return;
+    }
+
+    s_display_refresh_paused = false;
+    lvgl_port_unlock();
+    esp_err_t err = lvgl_port_resume();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "failed to resume lvgl: %s", esp_err_to_name(err));
+    }
+    lvgl_port_task_wake(LVGL_PORT_EVENT_USER, nullptr);
+}
+
 }  // namespace
+
+esp_err_t KeyboardZoneDisplayPrepareSharedSpiBus() {
+    s_last_display_error = EnsureDisplaySpiBus();
+    return s_last_display_error;
+}
 
 esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic) {
     if (pmic == nullptr) {
@@ -281,6 +383,7 @@ esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic) {
 
     esp_err_t err = InitializeDisplay(pmic);
     if (err != ESP_OK) {
+        s_last_display_error = err;
         ESP_LOGW(TAG, "zone display init failed: %s", esp_err_to_name(err));
         return err;
     }
@@ -292,5 +395,61 @@ esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic) {
         DrawBlackScreen();
     }
     s_guide_visible = next_visible;
+    s_last_display_error = ESP_OK;
     return ESP_OK;
+}
+
+esp_err_t KeyboardAirMouseDisplayToggle(i2c_master_dev_handle_t pmic,
+                                        SemaphoreHandle_t i2c_mutex) {
+    if (pmic == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = InitializeDisplay(pmic, i2c_mutex);
+    if (err != ESP_OK) {
+        s_last_display_error = err;
+        ESP_LOGW(TAG, "air mouse display init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    const bool next_on = !s_air_mouse_display_on;
+    if (next_on) {
+        err = SetDisplayOn(true);
+        if (err != ESP_OK) {
+            s_last_display_error = err;
+            return err;
+        }
+        if (s_display_refresh_paused) {
+            DrawZoneGuideLocked();
+            ResumeDisplayRefresh();
+        } else {
+            DrawZoneGuide();
+        }
+    } else {
+        if (!PauseDisplayRefresh()) {
+            s_last_display_error = ESP_ERR_TIMEOUT;
+            return s_last_display_error;
+        }
+        err = SetDisplayOn(false);
+        if (err != ESP_OK) {
+            ResumeDisplayRefresh();
+            s_last_display_error = err;
+            return err;
+        }
+    }
+    s_air_mouse_display_on = next_on;
+    s_last_display_error = ESP_OK;
+    return ESP_OK;
+}
+
+bool KeyboardZoneDisplayInitialized() {
+    return s_display_initialized;
+}
+
+bool KeyboardAirMouseDisplayIsOn() {
+    return s_air_mouse_display_on;
+}
+
+esp_err_t KeyboardZoneDisplayLastError() {
+    return s_last_display_error;
 }

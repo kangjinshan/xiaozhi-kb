@@ -35,11 +35,32 @@ int main() {
     ExpectBool("no IRQ is ignored",
                IsAxp2101PowerKeyShortPressIrq(0x00),
                false);
+    ExpectBool("release edge toggles display",
+               IsAxp2101PowerKeyToggleEvent(0x01),
+               true);
+    ExpectBool("falling edge alone does not toggle display",
+               IsAxp2101PowerKeyToggleEvent(0x02),
+               false);
+    ExpectBool("short press toggles display",
+               IsAxp2101PowerKeyToggleEvent(0x08),
+               true);
 
     if (Axp2101PowerKeyShortPressMask() != 0x08) {
         std::fprintf(stderr,
                      "short press mask: expected 0x08, got 0x%02x\n",
                      Axp2101PowerKeyShortPressMask());
+        return 1;
+    }
+    if (Axp2101PowerKeyIrqEnableMask() != 0x0B) {
+        std::fprintf(stderr,
+                     "power key IRQ enable mask: expected 0x0b, got 0x%02x\n",
+                     Axp2101PowerKeyIrqEnableMask());
+        return 1;
+    }
+    if (Axp2101PowerKeyToggleEventMask() != 0x09) {
+        std::fprintf(stderr,
+                     "power key toggle mask: expected 0x09, got 0x%02x\n",
+                     Axp2101PowerKeyToggleEventMask());
         return 1;
     }
 
@@ -50,12 +71,19 @@ int main() {
         return 1;
     }
 
-    if (PowerKeyShortPressHidKey(KeyboardProfile::kProfile2) != 0x2B) {
+    if (PowerKeyShortPressHidKey(KeyboardProfile::kProfile2) != 0) {
         std::fprintf(stderr,
-                     "profile2 power key short press hid key: expected 0x2B, got 0x%02x\n",
+                     "profile2 power key short press hid key: expected 0, got 0x%02x\n",
                      PowerKeyShortPressHidKey(KeyboardProfile::kProfile2));
         return 1;
     }
+
+    ExpectBool("profile1 power key does not toggle display",
+               PowerKeyShortPressTogglesDisplay(KeyboardProfile::kProfile1),
+               false);
+    ExpectBool("profile2 power key toggles display",
+               PowerKeyShortPressTogglesDisplay(KeyboardProfile::kProfile2),
+               true);
 
     return 0;
 }

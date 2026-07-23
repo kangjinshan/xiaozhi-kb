@@ -179,7 +179,7 @@ void BuildSelectorUI(Display* display) {
                      &kRecorderContext);
     CreateModeButton(list,
                      "K2",
-                     "Bluetooth KB",
+                     "Keyboard + Mouse",
                      lv_color_hex(0xD0A215),
                      &kKeyboardProfile2Context);
 }
