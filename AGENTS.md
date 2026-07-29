@@ -1,6 +1,6 @@
 # XiaoZhi KB 协作开发指南
 
-> 最后更新：2026-07-23
+> 最后更新：2026-07-29
 
 ## 1. 系统概述
 
@@ -13,14 +13,14 @@
 | 目录 | 职责 | 关键说明 | AGENTS.md |
 | --- | --- | --- | --- |
 | `main/` | 固件入口、语音主循环、音频、显示、协议与板级适配 | `main/main.cc` 负责模式分派 | 本次未递归覆盖 |
-| `main/apps/` | 选择器、键盘和金山 AI 三个独立应用 | 模式值由 `AppModeRead()` 读取 | 本次未递归覆盖 |
+| `main/apps/` | 选择器、键盘和金山 AI 三个独立应用 | 模式值由 `AppModeRead()` 读取 | [键盘模块指南](main/apps/ble_keyboard/AGENTS.md) |
 | `main/boards/waveshare/esp32-c6-touch-amoled-2.16/` | 目标板 GPIO、PMIC、AMOLED、触摸与 SD 初始化 | SPI2 共享约束是最高风险点 | [开发指南](main/boards/waveshare/esp32-c6-touch-amoled-2.16/AGENTS.md) |
 | `main/sdcard/` | SDSPI 挂载、自检和可选日志落盘 | `SdCardLogStart()` 不能用于小智或录音模式 | 本次未递归覆盖 |
 | `scripts/` | 构建、发布、资源和真机稳定性检查 | 串口脚本必须保持安全 DTR/RTS 状态 | [开发指南](scripts/AGENTS.md) |
 | `docs/` | 设计、计划与录音防回归说明 | 录音改动前先读 `docs/recorder-design-guardrails.md` | 本次未递归覆盖 |
 | `partitions/` | Flash 分区表 | 当前 C6 使用 `v2/16m_c3.csv` | 本次未递归覆盖 |
 
-本次按用户批准采用聚焦文档范围，只覆盖根目录、目标板目录和 `scripts/`；未声称全仓递归覆盖。
+当前文档按聚焦范围覆盖根目录、键盘模块、目标板目录和 `scripts/`；未声称全仓递归覆盖。
 
 ## 3. 核心场景索引
 
@@ -39,7 +39,7 @@
 - **BLE HID 键盘与触控板**
   - 入口：`RunKeyboardApp()`（`main/apps/ble_keyboard/keyboard_app.cc`）
   - 核心逻辑：`BleHidKeyboard::Init()`、`KeyboardTouchArrows`、`TouchpadMotion`
-  - 副作用：广播 `XiaoZhi KB`；同一 HID report map 用 Report ID 1 发送九宫格触摸键盘、Report ID 2 发送相对鼠标。所有历史键盘 profile 在运行时统一为配置 2；亮屏时 CST9217 全屏拖动发送鼠标位移，九宫格仅作示意，暗屏时关闭鼠标移动并恢复原九宫格键盘触区。BOOT/GPIO10 为鼠标左/右键，PWR 短按 IRQ 或松键沿切换两种触摸输入状态。
+  - 副作用：广播 `XiaoZhi KB`；同一 HID report map 用 Report ID 1 发送九宫格触摸键盘、Report ID 2 发送相对鼠标。所有历史键盘 profile 在运行时统一为配置 2；亮屏时 CST9217 全屏拖动发送鼠标位移，九宫格仅作示意，右上角以 16px Montserrat 显示 AXP2101 剩余电量百分比并约每 10 秒刷新；暗屏时关闭鼠标移动、停止电量 UI 刷新并恢复原九宫格键盘触区。BOOT/GPIO10 为鼠标左/右键，PWR 短按 IRQ 或松键沿切换两种触摸输入状态。
 - **金山 AI 助手交互、录音和回放**
   - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
   - 核心逻辑：`RecorderBuildAssistantUi()`、`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
@@ -64,6 +64,7 @@
 ## 4. 全局设计约束
 
 - 固定使用 ESP-IDF 5.5.3 和 `esp32c6`；干净构建必须保留 `CONFIG_BOARD_TYPE_WAVESHARE_ESP32_C6_TOUCH_AMOLED_2_16=y`。
+- 键鼠亮屏电量标签使用 `lv_font_montserrat_16`；干净构建必须保留 `sdkconfig.defaults` 中的 `CONFIG_LV_FONT_MONTSERRAT_16=y`，调整为其他 LVGL 内置字号时必须同步固化相应字体配置。
 - GPIO12/GPIO13 是 USB D-/D+，禁止配置为普通 GPIO。GPIO9 的 BOOT 是鼠标左键，GPIO10 是鼠标右键；中间 PWR 键属于 AXP2101，不是普通 GPIO。
 - 键鼠配置 2 不得读取 QMI8658 控制鼠标。CST9217 与 AXP2101 复用 I2C0（GPIO8 SDA / GPIO7 SCL）；触摸读取和 ACK 必须保持在同一个 I2C 锁区间内，BLE HID 发送必须在释放 I2C 锁后执行。
 - BLE HID 描述符变化后，macOS 可能继续缓存旧的纯键盘描述符；真机验证前先在蓝牙设置中忽略 `XiaoZhi KB` 再重新配对。鼠标移动与按键报告共用短时互斥，禁止在持锁期间延时或执行 I2C 访问。
@@ -106,7 +107,7 @@
 - 新增或调整应用模式：`main/apps/app_mode.*`、`main/main.cc`、`main/apps/app_selector.cc`。
 - 调整目标板引脚或初始化顺序：目标板目录的 `config.h` 和 `.cc`；先检查 SPI2、I2C0、USB 引脚冲突。
 - 修改金山 AI UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增固定中文前更新字体子集和展示模型测试；修改动态历史文本时同时运行 `recorder_playback_menu_test.cc`、`recorder_history_layout_test.cc` 与 `recorder_common_font_test.cc`。
-- 修改键盘触区或触控板：`main/apps/ble_keyboard/keyboard_touch_action.*`、`keyboard_touch_arrows.*`、`touchpad_motion.*`。触摸坐标方向只在 `ReadKeyboardTouch()` 校准一次；真机调整灵敏度时同时检查慢速精细移动、快速加速、抬手重按不跳变、PWR 跨模式不误触，以及 BLE 断开后立即停止并清空残余位移。
+- 修改键盘触区、触控板或亮屏状态栏：先读 `main/apps/ble_keyboard/AGENTS.md`；入口为 `keyboard_touch_action.*`、`keyboard_touch_arrows.*`、`touchpad_motion.*` 和 `keyboard_zone_display.*`。触摸坐标方向只在 `ReadKeyboardTouch()` 校准一次；真机调整时同时检查鼠标移动、PWR 跨模式、电量刷新、BLE 断开和 SPI2/LVGL 稳定性。
 - 修改 SD 日志：`main/sdcard/sdcard_log.cc`；若要在系统任务中使用，必须先改为独立日志任务和有界队列，不能简单增大 `sys_evt` 栈掩盖同步 I/O。
 
 ## 6. AGENTS 维护规则

@@ -27,8 +27,10 @@ constexpr uint32_t kTouchPollMs = 20;
 constexpr uint32_t kRepeatMs = 120;
 constexpr uint32_t kTouchReadWarnMs = 1000;
 constexpr uint32_t kPmicReadWarnMs = 1000;
+constexpr uint32_t kBatteryPollMs = 10000;
 constexpr uint32_t kSelectorHoldMs = 2000;
 constexpr uint8_t kAxp2101Address = 0x34;
+constexpr uint8_t kAxp2101BatteryLevelReg = 0xA4;
 constexpr uint8_t kAxp2101Irq1StatusReg = 0x48;
 constexpr uint8_t kAxp2101Irq2EnableReg = 0x41;
 constexpr uint8_t kAxp2101Irq2StatusReg = 0x49;
@@ -158,6 +160,25 @@ esp_err_t ClearAxp2101IrqStatus(i2c_master_dev_handle_t pmic) {
         return err;
     }
     return WriteI2cReg(pmic, kAxp2101Irq3StatusReg, 0xFF);
+}
+
+esp_err_t ReadAxp2101BatteryLevel(i2c_master_dev_handle_t pmic, int* level) {
+    if (pmic == nullptr || level == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t raw_level = 0;
+    const esp_err_t err =
+        ReadI2cReg(pmic, kAxp2101BatteryLevelReg, &raw_level);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (raw_level > 100) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    *level = raw_level;
+    return ESP_OK;
 }
 
 void CleanupTouchHardware(TouchHardware* hardware) {
@@ -463,11 +484,17 @@ void TouchArrowTask(void* arg) {
     bool left_command_pressed = false;
     bool last_display_on = KeyboardInputModeDisplayIsOn();
     bool suppress_touch_until_release = false;
+    TickType_t last_battery_poll_tick = 0;
 
     while (true) {
         const TickType_t now = xTaskGetTickCount();
         uint8_t power_key_hid_to_tap = 0;
         bool display_toggle_requested = false;
+        int battery_level = -1;
+        esp_err_t battery_err = ESP_OK;
+        const bool poll_battery =
+            last_battery_poll_tick == 0 ||
+            now - last_battery_poll_tick >= pdMS_TO_TICKS(kBatteryPollMs);
 
         // Keep the PMIC + complete CST9217 read/ACK polling group atomic on
         // the shared I2C0 bus.
@@ -480,6 +507,11 @@ void TouchArrowTask(void* arg) {
             &power_key_short_latched,
             &display_toggle_requested,
             &power_key_hid_to_tap);
+        if (poll_battery) {
+            battery_err = ReadAxp2101BatteryLevel(
+                context->hardware.pmic, &battery_level);
+            last_battery_poll_tick = now;
+        }
 
         KeyboardTouchAction action = KeyboardTouchAction::kNone;
         KeyboardTouchSample touch_sample = {};
@@ -494,6 +526,22 @@ void TouchArrowTask(void* arg) {
                 LCD_V_RES);
         }
         xSemaphoreGive(context->i2c_mutex);
+
+        if (poll_battery) {
+            if (battery_err == ESP_OK) {
+                const esp_err_t display_err =
+                    KeyboardZoneDisplaySetBatteryLevel(battery_level);
+                if (display_err != ESP_OK) {
+                    ESP_LOGW(TAG,
+                             "battery display update failed: %s",
+                             esp_err_to_name(display_err));
+                }
+            } else {
+                ESP_LOGW(TAG,
+                         "battery level read failed: %s",
+                         esp_err_to_name(battery_err));
+            }
+        }
 
         if (touch_err != ESP_OK) {
             if (!touch_warning_logged ||
@@ -688,6 +736,19 @@ void StartKeyboardTouchArrows(BleHidKeyboard& keyboard, KeyboardProfile profile)
     }
 
     if (profile == KeyboardProfile::kProfile2) {
+        int battery_level = -1;
+        xSemaphoreTake(context.i2c_mutex, portMAX_DELAY);
+        const esp_err_t battery_err =
+            ReadAxp2101BatteryLevel(context.hardware.pmic, &battery_level);
+        xSemaphoreGive(context.i2c_mutex);
+        if (battery_err == ESP_OK) {
+            KeyboardZoneDisplaySetBatteryLevel(battery_level);
+        } else {
+            ESP_LOGW(TAG,
+                     "initial battery level read failed: %s",
+                     esp_err_to_name(battery_err));
+        }
+
         const esp_err_t display_err =
             KeyboardInputModeDisplayToggle(
                 context.hardware.pmic, context.i2c_mutex);

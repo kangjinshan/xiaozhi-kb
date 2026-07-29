@@ -15,6 +15,7 @@
 #include <lvgl.h>
 
 #include <atomic>
+#include <cstdio>
 
 #define TAG "kb_zone_display"
 
@@ -33,6 +34,8 @@ bool s_display_refresh_paused = false;
 lv_display_t* s_display = nullptr;
 esp_lcd_panel_handle_t s_panel = nullptr;
 esp_err_t s_last_display_error = ESP_OK;
+std::atomic_int s_battery_level{-1};
+lv_obj_t* s_battery_label = nullptr;
 
 static const sh8601_lcd_init_cmd_t kVendorInit[] = {
     {0x11, (uint8_t[]){0x00}, 0, 120},
@@ -268,6 +271,7 @@ void AddCell(lv_obj_t* parent,
 void DrawZoneGuideLocked() {
     lv_obj_t* screen = lv_screen_active();
     lv_obj_clean(screen);
+    s_battery_label = nullptr;
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x0F1115), 0);
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -276,6 +280,20 @@ void DrawZoneGuideLocked() {
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &font_puhui_basic_20_4, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
+
+    s_battery_label = lv_label_create(screen);
+    char battery_text[8] = "--%";
+    const int battery_level = s_battery_level.load();
+    if (IsKeyboardBatteryLevelValid(battery_level)) {
+        std::snprintf(
+            battery_text, sizeof(battery_text), "%d%%", battery_level);
+    }
+    lv_label_set_text(s_battery_label, battery_text);
+    lv_obj_set_style_text_color(
+        s_battery_label, lv_color_hex(0xAAB4C3), 0);
+    lv_obj_set_style_text_font(
+        s_battery_label, &lv_font_montserrat_16, 0);
+    lv_obj_align(s_battery_label, LV_ALIGN_TOP_RIGHT, -18, 22);
 
     lv_obj_t* grid = lv_obj_create(screen);
     lv_obj_set_size(grid, LCD_H_RES - 36, LCD_V_RES - 86);
@@ -322,6 +340,7 @@ void DrawBlackScreen() {
 
     lv_obj_t* screen = lv_screen_active();
     lv_obj_clean(screen);
+    s_battery_label = nullptr;
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -441,6 +460,32 @@ esp_err_t KeyboardInputModeDisplayToggle(i2c_master_dev_handle_t pmic,
     }
     s_input_mode_display_on.store(next_on);
     s_last_display_error = ESP_OK;
+    return ESP_OK;
+}
+
+esp_err_t KeyboardZoneDisplaySetBatteryLevel(int level) {
+    if (!IsKeyboardBatteryLevelValid(level)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    s_battery_level.store(level);
+    if (!s_display_initialized || !s_input_mode_display_on.load()) {
+        return ESP_OK;
+    }
+
+    if (!lvgl_port_lock(30000)) {
+        ESP_LOGW(TAG, "failed to lock lvgl for battery update");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (s_battery_label != nullptr) {
+        char battery_text[8];
+        std::snprintf(
+            battery_text, sizeof(battery_text), "%d%%", level);
+        lv_label_set_text(s_battery_label, battery_text);
+        lv_obj_invalidate(s_battery_label);
+    }
+    lvgl_port_unlock();
     return ESP_OK;
 }
 
