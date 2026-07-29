@@ -11,5 +11,12 @@ int main() {
         std::fprintf(stderr, "visible guide should become hidden\n");
         return 1;
     }
+    if (!IsKeyboardBatteryLevelValid(0) ||
+        !IsKeyboardBatteryLevelValid(100) ||
+        IsKeyboardBatteryLevelValid(-1) ||
+        IsKeyboardBatteryLevelValid(101)) {
+        std::fprintf(stderr, "battery percentage validation failed\n");
+        return 1;
+    }
     return 0;
 }

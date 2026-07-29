@@ -11,6 +11,7 @@ esp_err_t KeyboardZoneDisplayToggle(i2c_master_dev_handle_t pmic);
 esp_err_t KeyboardInputModeDisplayToggle(
     i2c_master_dev_handle_t pmic,
     SemaphoreHandle_t i2c_mutex = nullptr);
+esp_err_t KeyboardZoneDisplaySetBatteryLevel(int level);
 bool KeyboardZoneDisplayInitialized();
 bool KeyboardInputModeDisplayIsOn();
 esp_err_t KeyboardZoneDisplayLastError();
