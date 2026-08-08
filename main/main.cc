@@ -13,6 +13,7 @@
 #include "app_selector.h"
 #include "keyboard_app.h"
 #include "recorder_app.h"
+#include "mic_app.h"
 
 #define TAG "main"
 
@@ -67,6 +68,16 @@ extern "C" void app_main(void)
     if (mode == AppMode::kRecorder) {
         ESP_LOGI(TAG, "boot -> recorder app");
         RunRecorderApp();  // Runs the SD-card recorder app and never returns
+        return;
+    }
+
+    if (mode == AppMode::kMic) {
+        ESP_LOGI(TAG, "boot -> mic app");
+        if (!StartMicApp()) {
+            ESP_LOGE(TAG, "Mic app task creation failed");
+        }
+        // Returning deletes the ESP-IDF main task and releases its 8 KiB
+        // stack; Mic keeps running on its larger ESP-SR/UDP task stack.
         return;
     }
 

@@ -79,7 +79,16 @@ list(APPEND SOURCES "apps/recorder/agent_turn_store.cc")
 list(APPEND SOURCES "apps/recorder/agent_voice_protocol.cc")
 list(APPEND SOURCES "apps/recorder/recorder_network.cc")
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps" "apps/ble_keyboard" "sdcard" "apps/recorder")
+# Real-time stereo Wi-Fi microphone — ES7210 MIC1/MIC2 + ESP-SR NS + UDP PCM.
+list(APPEND SOURCES "apps/mic/mic_app.cc")
+list(APPEND SOURCES "apps/mic/mic_controls.cc")
+list(APPEND SOURCES "apps/mic/mic_display.cc")
+list(APPEND SOURCES "apps/mic/mic_stereo_processor.cc")
+list(APPEND SOURCES "apps/mic/mic_wifi_audio.cc")
+list(APPEND SOURCES "apps/mic/mic_wifi_protocol.cc")
+list(APPEND SOURCES "apps/mic/mic_recording_utils.cc")
+
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "apps" "apps/ble_keyboard" "sdcard" "apps/recorder" "apps/mic")
 
 # Add board common files
 list(APPEND SOURCES

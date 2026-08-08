@@ -1,15 +1,16 @@
-# XiaoZhi KB：小智语音 + 金山 AI 助手 + 蓝牙键盘/触控板
+# XiaoZhi KB：小智语音 + 金山 AI + 蓝牙键鼠 + 实时立体声 Mic
 
 这是一个基于小智 ESP32 开源工程改造的 ESP32-C6 固件，目标硬件是 **Waveshare ESP32-C6-Touch-AMOLED-2.16**。它把同一块开发板做成多个可切换的应用：
 
 - **小智语音模式**：保留小智原有语音助手能力。
 - **金山 AI 助手模式**：点按一个主按钮完成说话、发送、暂停和继续；离线对话先存 SD，联网后通过持久 WSS 发送给 Agent，回复完整落卡并校验后自动播放。
 - **蓝牙键盘/触控板模式**：作为同一个 BLE HID 键鼠复合设备连接 MacBook；亮屏时整块触摸屏移动指针，暗屏时恢复九宫格键盘触区。
-- **开机选择界面**：通过触摸屏在小智语音 / 金山 AI / 蓝牙键盘之间选择。
+- **实时立体声 Mic**：MIC1/MIC2 同时采集，使用 ESP-SR 芯片降噪，通过 Wi-Fi 每 20 ms 实时输出 PCM；START/STOP 只控制可选 SD 备份录音。
+- **开机选择界面**：通过触摸屏在小智语音 / 金山 AI / 蓝牙键盘 / Stereo Wi-Fi Mic 之间选择。
 
-此外还为整机增加了 **SD 卡（TF 卡）支持**：三种模式均可挂载 SD 卡，图片和对话音频等文件可直接存卡。小智、金山 AI 和键鼠模式都不安装同步日志落盘钩子，避免任务栈溢出、SPI2 争用或 BLE 事件任务被 FATFS 阻塞；运行日志统一走 USB 串口。
+此外还为整机增加了 **SD 卡（TF 卡）支持**：四种应用均可挂载 SD 卡，图片和对话音频等文件可直接存卡。小智、金山 AI 和 Mic 不安装同步日志落盘钩子，避免任务栈溢出或 SPI2 争用；运行日志统一走 USB 串口。
 
-项目当前已在真机上验证：SD 卡识别挂载、录音存 WAV、蓝牙键盘连接、触屏方向键、录音返回菜单稳定性、小智 Wi-Fi 启动稳定性，以及金山 AI 的 PWR 息屏/亮屏显示链路均正常。
+项目当前已在真机上验证：SD 卡识别挂载、录音存 WAV、蓝牙键盘连接、触屏方向键、录音返回菜单稳定性、小智 Wi-Fi 启动稳定性、金山 AI 的 PWR 显示链路，以及 Mic 50.02 秒固件侧和 6 分钟以上 macOS 端到端 1.00x 实时双声道 UDP 零丢包传输。BlackHole 2ch 的 48 kHz 双声道与单声道输入均已读到实时非零样本。
 
 ## 硬件目标
 
@@ -32,9 +33,9 @@
 
 | 位置 | 丝印 | 实际用途 | 当前固件行为 |
 | --- | --- | --- | --- |
-| 最左 | IO10 | GPIO10 普通按键 | 键鼠配置2为鼠标右键；旧配置1按住为右 Option |
-| 中间 | PWR | AXP2101 电源键 | 金山 AI 和键鼠配置2切换息屏/亮屏；旧配置1为退格；长按仍可能触发电源行为 |
-| 最右 | BOOT | GPIO9 / BOOT 键 | 键鼠配置2为鼠标左键；旧配置1单击为回车 |
+| 最左 | IO10 / KEY | GPIO10 普通按键 | Mic 输入增益 +10%；键鼠配置2为鼠标右键 |
+| 中间 | PWR | AXP2101 电源键 | Mic、金山 AI 和键鼠配置2切换息屏/亮屏；长按仍可能触发电源行为 |
+| 最右 | BOOT | GPIO9 / BOOT 键 | Mic 输入增益 -10%；键鼠配置2为鼠标左键 |
 
 ## 功能说明
 
@@ -44,13 +45,14 @@
 
 - namespace：`appsel`
 - key：`mode`
-- 可选值：`selector`、`xiaozhi`、`keyboard`、`recorder`
+- 可选值：`selector`、`xiaozhi`、`keyboard`、`recorder`、`mic`
 
 分派规则：
 
 - `mode=keyboard`：进入蓝牙键盘模式。
 - `mode=xiaozhi`：进入小智语音模式。
 - `mode=recorder`：进入金山 AI 助手模式（内部仍沿用 recorder 模式名）。
+- `mode=mic`：进入实时立体声 Wi-Fi Mic。
 - NVS 为空、值非法或 `mode=selector`：进入开机选择界面。
 
 相关代码：
@@ -59,19 +61,73 @@
 - `main/apps/app_mode.cc`
 - `main/apps/app_selector.cc`
 - `main/apps/recorder/`（金山 AI 助手 app）
+- `main/apps/mic/`（实时立体声 Mic）
 - `main/sdcard/`（SD 卡挂载与日志落盘）
 
 ### 2. 开机选择界面
 
-选择界面直接运行在板载触摸屏上，显示三个入口：
+选择界面直接运行在板载触摸屏上，显示四个入口：
 
 - `XiaoZhi AI`：小智语音
 - `Jinshan AI`：金山 AI 语音助手
 - `Keyboard + Mouse`：触摸键盘 + 触控板复合设备
+- `Stereo Wi-Fi Mic`：实时立体声降噪麦克风
 
 点击后会写入 NVS 并软重启，重启后进入对应模式。选择界面不启动 Wi-Fi、音频或 BLE，只初始化显示和触摸，启动成本较低。
 
-### 3. 蓝牙键盘 / 触控板模式
+### 3. 实时立体声 Wi-Fi Mic
+
+ESP32-C6 没有 Classic Bluetooth HFP，也没有可用的 LE Audio 控制器；自定义
+BLE GATT + Opus 真机无法达到实时速度，因此 Mic 正式使用 Wi-Fi。进入 Mic 后
+立即持续采集和发送，不需要先按 `START RECORDING`：
+
+- MIC1 固定为左声道，MIC2 固定为右声道，16 kHz / PCM16 / stereo。
+- ESP-SR `ns_create(10)` 处理共同声场并保留左右差分空间信息。
+- KEY/GPIO10 提高共同输入增益 10%，BOOT/GPIO9 降低 10%。
+- PWR 短按只息屏/亮屏，实时流和可选录音继续。
+- `START/STOP RECORDING` 只同步保存 `/sdcard/mic/micNNNN.wav`，不控制实时流。
+- `MENU` 完成当前 WAV 后返回四项选择器。
+
+Mic 复用小智模式已经保存的 Wi-Fi；若没有配网，先进入小智完成配置。电脑与
+设备接入同一局域网后运行：
+
+```bash
+# 首次使用：安装真正的 output→input 虚拟回环驱动，安装后重启 Mac
+brew install --cask blackhole-2ch
+
+# 重启后安装常驻接收服务；以后在设备上进入/退出 Mic 即可自动切换/恢复
+python3 scripts/install_mic_macos_service.py install
+
+# 查看后台服务状态
+python3 scripts/install_mic_macos_service.py status
+
+# 以下命令用于前台调试或不安装常驻服务时手动运行
+# 查看 PortAudio / BlackHole 设备名
+python3 scripts/mic_wifi_receiver.py --list-devices
+
+# 实时送入 BlackHole；收到首包后自动将 macOS 默认麦克风切到 BlackHole
+python3 scripts/mic_wifi_receiver.py --play-to "BlackHole 2ch"
+```
+
+常驻服务会一直等待设备的 Mic 实时流，不会录音或占用内建麦克风；进入 Mic 后
+收到首包才切换到 BlackHole，退出 Mic 后恢复原输入。卸载服务可运行
+`python3 scripts/install_mic_macos_service.py uninstall`。接收器会自动探测本机
+各网卡的广播地址；如网络禁止广播，可追加
+`--device-ip 192.168.x.x`。只有使用 `--play-to` 时才需要
+`pip install sounddevice`。macOS 上收到实时首包后会自动切换默认输入；设备停止
+推流超过 2 秒或接收器退出时恢复原输入。可用 `--no-switch-input` 禁止自动切换，
+或用 `--keep-input` 保持 BlackHole。接收器会先用双声道测试信号验证目标确实能
+output→input 回送；本机已有的 `ESHOW录音` 实测输入全零，不能代替 BlackHole。
+`--wav /tmp/mic.wav` 可同时留一份实时备份，但不是“录完再发送”。
+
+macOS 默认输入切换只影响随后创建的音频会话，不能强制已经打开的应用迁移设备。
+如果豆包、会议软件或浏览器仍在使用 MacBook 内建麦克风，请在 BlackHole 已成为
+系统默认输入后**完全退出并重新打开该应用**；只关闭窗口通常不够。有独立麦克风
+选择器的应用应选 `BlackHole 2ch` 或“系统默认”。豆包电脑版 2.21.10 没有独立
+输入选择器，重启后仍显示“系统麦克风”是正常的，此时它跟随的就是当前系统默认
+设备 `BlackHole 2ch`。
+
+### 4. 蓝牙键盘 / 触控板模式
 
 蓝牙键盘模式会广播 BLE HID 设备：
 
@@ -147,7 +203,7 @@
 - `main/apps/ble_keyboard/keyboard_touch_gesture.cc`
 - `main/apps/ble_keyboard/keyboard_pmic_power_key.cc`
 
-### 4. 小智语音模式
+### 5. 小智语音模式
 
 小智语音模式沿用原项目的 `Application` 主流程：
 
@@ -158,7 +214,7 @@
 
 在小智语音模式下，BOOT 键长按 2 秒会写入 `mode=selector` 并重启，返回开机选择界面。
 
-### 5. 金山 AI 语音助手模式
+### 6. 金山 AI 语音助手模式
 
 金山 AI 是一个独立应用（内部沿用 recorder 代码目录，不走小智 `Application`），自己初始化屏幕、音频 codec 和 SD 卡：
 
@@ -190,7 +246,7 @@ Agent WSS 地址由 `CONFIG_AGENT_VOICE_URL` 配置，设备 bearer token 只写
 - `scripts/verify_agent_voice_runtime.py`（至少监听 30 秒，不主动复位设备）
 - `docs/recorder-design-guardrails.md`（录音新功能设计前必读，记录 SPI2 / ESP-SR 真机坑）
 
-### 6. SD 卡挂载与日志策略
+### 7. SD 卡挂载与日志策略
 
 - **挂载**：`main/sdcard/sdcard.cc` 提供 `SdCardMount(bool own_spi_bus)`，SPI 模式挂载到 `/sdcard`。
   SD 卡与 AMOLED 屏共用 SPI2 总线：小智模式复用屏幕已建总线（`own_spi_bus=false`），
@@ -219,7 +275,8 @@ Agent WSS 地址由 `CONFIG_AGENT_VOICE_URL` 配置，设备 bearer token 只写
 │   │   ├── app_mode.*                  # 模式读写和重启
 │   │   ├── app_selector.*              # 触屏开机选择界面
 │   │   ├── ble_keyboard/               # BLE HID 键盘应用
-│   │   └── recorder/                   # 金山 AI 助手（录音、传输、播放）
+│   │   ├── recorder/                   # 金山 AI 助手（录音、传输、播放）
+│   │   └── mic/                        # 双麦 ESP-SR + Wi-Fi 实时 PCM
 │   ├── sdcard/                         # SD 卡挂载与日志落盘
 │   ├── boards/                         # 各硬件板级适配
 │   ├── display/                        # 显示抽象和 LVGL 显示实现
@@ -279,13 +336,14 @@ ls /dev/cu.usbmodem*
 
 1. 编译并烧录固件。
 2. 设备启动后，如果 NVS 里没有有效模式，会显示选择界面（`Select App`）。
-3. 在屏幕上点击想进入的应用：`XiaoZhi AI` / `Jinshan AI` / `Keyboard + Mouse`。
+3. 在屏幕上点击想进入的应用：`XiaoZhi AI` / `Jinshan AI` / `Keyboard + Mouse` / `Stereo Wi-Fi Mic`。
 4. 设备写入 NVS 并重启，进入对应模式。
 5. **金山 AI**：点 `点击说话` 开始、说完点 `发送`，turn 存到 `/sdcard/agent/`；联网后 AI 回复落卡并自动播放。PWR 短按息屏，再短按亮屏；左上角 `MENU` 长按 2 秒退出。
 6. **键盘/触控板模式**：在 macOS 蓝牙设置中连接 `XiaoZhi KB`，然后测试：
    - 启动后九宫格示意图自动亮起；在任意位置拖动可移动指针，点按不会触发图上的键。BOOT 为鼠标左键，GPIO10 为鼠标右键。
    - 短按 PWR 暗屏后，触摸位置恢复原九宫格键盘：左下角退格、右上角回车、中间左 Command、右下角右 Option，以及四向方向键。
    - 暗屏键盘模式下，触摸屏左上角长按 2 秒返回选择界面。
+7. **Mic**：确保电脑与设备在同一 Wi-Fi；安装常驻接收服务后，进入 Mic 即自动切换到 BlackHole，无需点录音或每次手动运行命令。
 
 ## 模式切换
 
@@ -294,12 +352,14 @@ ls /dev/cu.usbmodem*
 - 点 `XiaoZhi AI` 进入小智语音模式。
 - 点 `Jinshan AI` 进入金山 AI 语音助手模式。
 - 点 `Keyboard + Mouse` 进入同一套键盘/触控板配置（配置2）。
+- 点 `Stereo Wi-Fi Mic` 进入实时立体声麦克风。
 
 各模式返回选择界面：
 
 - 蓝牙键盘模式：触摸屏左上角长按 2 秒。
 - 小智语音模式：BOOT 键长按 2 秒。
 - 金山 AI 模式：屏幕左上角 `MENU` 长按 2 秒。
+- Mic 模式：点左上角 `MENU`。
 
 返回选择界面后，再点击另一个应用即可切换模式。
 
@@ -458,11 +518,16 @@ GPIO12 和 GPIO13 是 ESP32-C6 的 USB D- / D+。把它们配置成普通 GPIO �
 
 先安全监听串口并检查是否出现 `spi_hal_setup_trans`。如果存在，说明共享 SPI2 上的 AMOLED 与 SD 卡发生了未仲裁并发；不要先调整亮度、刷新率或动画掩盖重启症状。
 
+### 8. 为什么系统已切到 BlackHole，豆包仍像是在用内建麦克风？
+
+应用可以在启动时缓存 CoreAudio 输入设备；切换 macOS 默认输入不会迁移已存在的音频会话。确认“系统设置 → 声音 → 输入”中的默认设备为 `BlackHole 2ch` 后，完全退出并重新打开豆包。豆包设置中没有独立麦克风选择项，界面显示“系统麦克风”表示跟随当前系统默认输入，并不等于固定使用 MacBook 内建麦克风。
+
 ## 当前状态
 
 已完成并验证：
 
 - 开机选择界面。
+- 四项模式保存和启动分派，包括 `Stereo Wi-Fi Mic`。
 - NVS 模式保存和启动分派。
 - 小智语音模式入口。
 - 蓝牙 HID 键盘广播和连接。
@@ -473,12 +538,13 @@ GPIO12 和 GPIO13 是 ESP32-C6 的 USB D- / D+。把它们配置成普通 GPIO �
 - 触屏方向键和配置2四角/中心快捷触区。
 - 蓝牙键盘模式下触屏左上角长按返回选择界面。
 - 小智模式下 BOOT 长按返回选择界面。
-- SD 卡（TF 卡）识别与挂载，三种模式均可用；开机读写自检。
+- SD 卡（TF 卡）识别与挂载，四种应用均可用；开机读写自检。
 - 键盘模式可把系统日志落盘到 `/sdcard/log/bootN.log`；小智和录音模式日志走 USB 串口。
 - 独立金山 AI 模式：单一主按钮完成 `点击说话` / `发送` / `暂停` / `继续`，用户和 AI WAV 存到 `/sdcard/agent/`，完整回复自动播放；PWR 短按只切换 AMOLED 息屏/亮屏，左上角 `MENU` 长按退出。
 - 录音返回菜单的 SPI2 重启循环已修复，并有串口稳定性脚本防回归。
 - 小智 Wi-Fi 扫描阶段的 `sys_evt` 栈溢出已修复，并有串口稳定性脚本防回归。
 - 录音软件增益 + 削波保护；WAV 和清单均持久化到 SD，传输中断可在重连后幂等恢复。
+- Mic 使用 MIC1/L + MIC2/R、共享 ESP-SR NS 和 20 ms Wi-Fi UDP；50.02 秒固件侧及 6 分钟以上 macOS 端到端验收均达到 1.00x 且零丢包，BlackHole 的 48 kHz 双声道/单声道输入可读到实时非零样本；KEY/BOOT 调输入增益，PWR 只控制屏幕，START/STOP 只控制可选 WAV。
 
 仍需注意：
 

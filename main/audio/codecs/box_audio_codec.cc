@@ -8,10 +8,18 @@
 
 BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
     gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,
-    gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr, bool input_reference) {
+    gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr, bool input_reference,
+    uint16_t input_channel_mask) {
     duplex_ = true; // 是否双工
     input_reference_ = input_reference; // 是否使用参考输入，实现回声消除
-    input_channels_ = input_reference_ ? 2 : 1; // 输入通道数
+    input_channel_mask_ = input_channel_mask;
+    if (input_channel_mask_ == 0) {
+        input_channel_mask_ = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0);
+        if (input_reference_) {
+            input_channel_mask_ |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+        }
+    }
+    input_channels_ = __builtin_popcount(static_cast<unsigned>(input_channel_mask_));
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
     input_gain_ = 30;
@@ -186,6 +194,16 @@ void BoxAudioCodec::SetOutputVolume(int volume) {
     AudioCodec::SetOutputVolume(volume);
 }
 
+void BoxAudioCodec::SetInputGain(float gain) {
+    input_gain_ = gain;
+    if (input_enabled_) {
+        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(
+            input_dev_, input_channel_mask_, input_gain_));
+    }
+    ESP_LOGI(TAG, "Set ES7210 input gain to %.1f dB (mask=0x%04x)",
+             input_gain_, input_channel_mask_);
+}
+
 void BoxAudioCodec::EnableInput(bool enable) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == input_enabled_) {
@@ -195,15 +213,13 @@ void BoxAudioCodec::EnableInput(bool enable) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
             .channel = 4,
-            .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+            .channel_mask = input_channel_mask_,
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
         };
-        if (input_reference_) {
-            fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
-        }
         ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(
+            input_dev_, input_channel_mask_, input_gain_));
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
     }
@@ -233,15 +249,27 @@ void BoxAudioCodec::EnableOutput(bool enable) {
 }
 
 int BoxAudioCodec::Read(int16_t* dest, int samples) {
-    if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+    if (!input_enabled_) {
+        return 0;
+    }
+    const int result = esp_codec_dev_read(
+        input_dev_, static_cast<void*>(dest), samples * sizeof(int16_t));
+    if (result != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "ES7210 read failed: %d", result);
+        return 0;
     }
     return samples;
 }
 
 int BoxAudioCodec::Write(const int16_t* data, int samples) {
-    if (output_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+    if (!output_enabled_) {
+        return 0;
+    }
+    const int result = esp_codec_dev_write(
+        output_dev_, const_cast<int16_t*>(data), samples * sizeof(int16_t));
+    if (result != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "ES8311 write failed: %d", result);
+        return 0;
     }
     return samples;
 }
