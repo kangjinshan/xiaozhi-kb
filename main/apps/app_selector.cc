@@ -6,6 +6,7 @@
 #include "display.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lvgl.h>
@@ -24,13 +25,18 @@ struct SelectorButtonContext {
     KeyboardProfile profile;
     bool has_keyboard_profile;
     const char* log_name;
+    bool press_armed;
 };
+
+constexpr int64_t kSelectorTouchGuardUs = 1000 * 1000;
+int64_t s_selector_accept_press_at_us = INT64_MAX;
 
 SelectorButtonContext kXiaozhiContext = {
     .mode = AppMode::kXiaozhi,
     .profile = KeyboardProfile::kProfile1,
     .has_keyboard_profile = false,
     .log_name = "xiaozhi",
+    .press_armed = false,
 };
 
 SelectorButtonContext kRecorderContext = {
@@ -38,6 +44,7 @@ SelectorButtonContext kRecorderContext = {
     .profile = KeyboardProfile::kProfile1,  // 占位，不使用
     .has_keyboard_profile = false,
     .log_name = "recorder",
+    .press_armed = false,
 };
 
 SelectorButtonContext kKeyboardProfile2Context = {
@@ -45,7 +52,25 @@ SelectorButtonContext kKeyboardProfile2Context = {
     .profile = KeyboardProfile::kProfile2,
     .has_keyboard_profile = true,
     .log_name = "keyboard_profile_2",
+    .press_armed = false,
 };
+
+SelectorButtonContext kMicContext = {
+    .mode = AppMode::kMic,
+    .profile = KeyboardProfile::kProfile1,  // 占位，不使用
+    .has_keyboard_profile = false,
+    .log_name = "mic",
+    .press_armed = false,
+};
+
+void OnSelectorButtonPressed(lv_event_t* event) {
+    auto* context =
+        static_cast<SelectorButtonContext*>(lv_event_get_user_data(event));
+    if (context != nullptr) {
+        context->press_armed =
+            esp_timer_get_time() >= s_selector_accept_press_at_us;
+    }
+}
 
 void OnSelectorButtonClicked(lv_event_t* event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
@@ -57,6 +82,11 @@ void OnSelectorButtonClicked(lv_event_t* event) {
         ESP_LOGW(TAG, "selector button missing context");
         return;
     }
+    if (!context->press_armed) {
+        ESP_LOGW(TAG, "ignored startup touch on %s", context->log_name);
+        return;
+    }
+    context->press_armed = false;
 
     ESP_LOGI(TAG, "selected %s", context->log_name);
     if (context->has_keyboard_profile) {
@@ -81,7 +111,7 @@ lv_obj_t* CreateModeButton(lv_obj_t* parent,
                            lv_color_t accent,
                            SelectorButtonContext* context) {
     lv_obj_t* button = lv_button_create(parent);
-    lv_obj_set_size(button, LV_PCT(100), 98);
+    lv_obj_set_size(button, LV_PCT(100), 82);
     SetRoundedPanelStyle(button, lv_color_hex(0x1D222A), accent);
     lv_obj_set_style_pad_all(button, 14, 0);
     lv_obj_set_style_pad_column(button, 14, 0);
@@ -90,11 +120,12 @@ lv_obj_t* CreateModeButton(lv_obj_t* parent,
                           LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(button, OnSelectorButtonPressed, LV_EVENT_PRESSED, context);
     lv_obj_add_event_cb(button, OnSelectorButtonClicked, LV_EVENT_CLICKED, context);
 
     lv_obj_t* badge_box = lv_obj_create(button);
-    lv_obj_set_size(badge_box, 62, 62);
-    lv_obj_set_style_radius(badge_box, 31, 0);
+    lv_obj_set_size(badge_box, 54, 54);
+    lv_obj_set_style_radius(badge_box, 27, 0);
     lv_obj_set_style_bg_color(badge_box, accent, 0);
     lv_obj_set_style_bg_opa(badge_box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(badge_box, 0, 0);
@@ -182,6 +213,13 @@ void BuildSelectorUI(Display* display) {
                      "Keyboard + Mouse",
                      lv_color_hex(0xD0A215),
                      &kKeyboardProfile2Context);
+    CreateModeButton(list,
+                     "MIC",
+                     "Stereo Wi-Fi Mic",
+                     lv_color_hex(0xA855F7),
+                     &kMicContext);
+    s_selector_accept_press_at_us =
+        esp_timer_get_time() + kSelectorTouchGuardUs;
 }
 
 }  // namespace
