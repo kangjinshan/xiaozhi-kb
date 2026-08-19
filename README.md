@@ -186,7 +186,7 @@ macOS 默认输入切换只影响随后创建的音频会话，不能强制已�
 - CST9217 以 50 Hz 读取校准后的绝对坐标，再转换成相对 HID 位移；慢速拖动保持精细，快速拖动使用有界加速。
 - 新触点只建立坐标锚点，因此轻点触摸屏不会产生九宫格按键、鼠标点击或光标跳变。
 - PWR 切换亮暗屏后必须先抬起手指再接受新模式输入，防止亮屏拖动在切到暗屏后误触键盘。
-- BLE HID 使用 ESP-IDF 自带的 Apache NimBLE 后端，通知路径非阻塞；连接后请求 15–30 ms interval 和 6 秒 supervision timeout。通知缓冲暂时忙时退避 100 ms，避免高频指针报告演变成断连或卡死。
+- BLE HID 使用 ESP-IDF 自带的 Apache NimBLE 后端，通知路径非阻塞；先让 macOS 完成 15 ms 低延迟 HID 更新，若完成后 supervision timeout 仍是过短的 720 ms，再由外设保持同一 interval 跟进请求 6 秒，避免在加密期间并发第二个 LL procedure 造成 transaction collision。通知缓冲暂时忙时退避 100 ms，期间把新位移有界累计并在恢复后按 HID 范围分片排空，不再直接丢失鼠标行程；每 10 秒最多输出一条发送/失败/合并/积压统计。
 - 未连接时持续广播 `XiaoZhi KB`，不会沿用 ESP-IDF HID 示例的 180 秒广播超时；连接断开后自动恢复广播。
 - 广播数据和连接后的 GAP Device Name 都固定为 `XiaoZhi KB`，不会在 macOS 已连接列表里变成 NimBLE 默认名 `nimble`。
 - HID 使用 Just Works 的 Security Mode 1 Level 2（加密、无 PIN）并将 bond key 持久化到 NVS；连接建立后主动发起安全流程，避免 macOS 只建立临时 GATT 链路而一直显示“连接中”。
@@ -405,6 +405,12 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/ble_keyboard/touchpad_motion_test.cc \
   main/apps/ble_keyboard/touchpad_motion.cc \
   -o /tmp/touchpad_motion_test && /tmp/touchpad_motion_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/ble_keyboard \
+  main/apps/ble_keyboard/mouse_move_accumulator_test.cc \
+  main/apps/ble_keyboard/mouse_move_accumulator.cc \
+  -o /tmp/mouse_move_accumulator_test && /tmp/mouse_move_accumulator_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \

@@ -1,6 +1,6 @@
 # XiaoZhi KB 协作开发指南
 
-> 最后更新：2026-08-08
+> 最后更新：2026-08-19
 
 ## 1. 系统概述
 
@@ -76,7 +76,7 @@
 - 键鼠配置 2 不得读取 QMI8658 控制鼠标。CST9217 与 AXP2101 复用 I2C0（GPIO8 SDA / GPIO7 SCL）；触摸读取和 ACK 必须保持在同一个 I2C 锁区间内，BLE HID 发送必须在释放 I2C 锁后执行。
 - BLE HID 描述符变化后，macOS 可能继续缓存旧的纯键盘描述符；真机验证前先在蓝牙设置中忽略 `XiaoZhi KB` 再重新配对。鼠标移动与按键报告共用短时互斥，禁止在持锁期间延时或执行 I2C 访问。
 - 键鼠模式同样禁止安装 `SdCardLogStart()`：BLE GAP/HID 事件任务不得同步等待 FATFS/SPI，否则会造成 supervision timeout（HCI reason `0x08`）和输入假死。SD 可以保持挂载，日志只走 USB 串口。
-- BLE HID 必须使用 ESP-IDF 的 Apache NimBLE 后端，保持通知路径非阻塞；`esp_hid_gap.c` 在连接后请求 15–30 ms interval 和 6 s supervision timeout。触控板以 50 Hz 轮询，报告发送暂时失败时至少退避 100 ms，禁止切回 Bluedroid 的同步 GATTS 通知路径或恢复为每 tick 重试和错误日志风暴。
+- BLE HID 必须使用 ESP-IDF 的 Apache NimBLE 后端，保持通知路径非阻塞；`esp_hid_gap.c` 在 CONNECT 时只启动安全流程，不能同时发起本地 LL 参数更新。macOS 先完成自己的 15 ms HID 更新；完成事件若仍显示低于 4 s 的 supervision timeout，外设才以相同 interval 跟进请求 6 s，避免并发 procedure 的 HCI `0x2a` collision 和 720 ms 短恢复窗口。触控板以 50 Hz 轮询，报告发送暂时失败时至少退避 100 ms；退避期间必须有界累计新位移，恢复后按 HID 范围分片排空，断连或输入模式切换时清除残留。禁止切回 Bluedroid 的同步 GATTS 通知路径、直接丢弃拥塞期位移，或恢复为每 tick 重试和错误日志风暴。
 - NimBLE HID 广播必须使用 `BLE_HS_FOREVER` 持续到连接建立，不能恢复 ESP-IDF HID 示例的 180 秒演示超时；断开连接后必须重新进入可发现状态。
 - `esp_hidd_dev_init()` 注册完 NimBLE HID 的 `ble_hs_cfg` 回调后，必须调用 `ble_store_config_init()`、设置 `ble_hs_cfg.store_status_cb` 并用 `esp_nimble_enable()` 启动 Host task；仅调用 `esp_nimble_init()` 不会运行 Host，因而不会触发 `ESP_HIDD_START_EVENT` 或发出任何广播。
 - NimBLE GAP service name、广播名和 HID 配置名必须统一为 `XiaoZhi KB`；不能保留 sdkconfig 默认的 `nimble`，否则 macOS 扫描时显示 `XiaoZhi KB`、连接后却登记成另一台 `nimble` 设备。NimBLE Host 日志保持 Warning，禁止为每个 50 Hz mouse notify 输出 INFO。

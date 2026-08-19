@@ -6,6 +6,8 @@
 #include <functional>
 #include <utility>
 
+#include "mouse_move_accumulator.h"
+
 // USB HID modifier bits / keycodes（与官方 USB HID Usage Tables 一致）
 #define HID_MOD_RIGHT_ALT 0x40   // 右 Option (Right Alt/Option)
 #define HID_MOD_LEFT_GUI  0x08   // 左 Command (Left GUI/Command)
@@ -38,8 +40,12 @@ public:
     // 敲一下普通键：report[2]=keycode 发送 -> 50ms -> 全 0 发送。
     void TapKey(uint8_t keycode);
 
-    // 发送相对鼠标位移，范围为 HID 标准的 [-127, 127]。
+    // 累计相对鼠标位移并尝试发送一个 HID 分片。传入全零时也会继续排空
+    // 先前因 BLE 拥塞而暂存的位移。
     void SendMouseMove(int8_t dx, int8_t dy, int8_t wheel = 0);
+
+    // 切换输入模式时丢弃尚未发送的位移，避免再次进入鼠标模式时跳变。
+    void CancelPendingMouseMove();
 
     // 按下或释放一个鼠标键；button_mask 使用 HID_MOUSE_BUTTON_*。
     void SendMouseButton(uint8_t button_mask, bool pressed);
@@ -65,6 +71,12 @@ private:
 
     uint8_t report_[8] = {0};   // [modifier, reserved, key1..key6]
     uint8_t mouse_buttons_ = 0;
+    MouseMoveAccumulator mouse_move_accumulator_;
+    uint32_t mouse_reports_sent_ = 0;
+    uint32_t mouse_reports_failed_ = 0;
+    uint32_t mouse_moves_coalesced_ = 0;
+    uint32_t mouse_pending_clamped_ = 0;
+    int64_t mouse_stats_last_log_us_ = 0;
     bool inited_ = false;
     std::atomic_bool connected_{false};
     std::atomic<int64_t> mouse_send_backoff_until_us_{0};

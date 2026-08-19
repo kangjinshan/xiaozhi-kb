@@ -581,6 +581,7 @@ void TouchArrowTask(void* arg) {
             ReleaseModifiersIfNeeded(
                 context, &right_option_pressed, &left_command_pressed);
             s_touchpad_motion.Reset();
+            context->keyboard->CancelPendingMouseMove();
             last_tap_action = KeyboardTouchAction::kNone;
             last_send_tick = 0;
             blocked_by_disconnect = false;
@@ -618,9 +619,9 @@ void TouchArrowTask(void* arg) {
                 touch_sample.y,
                 touch_sample.touched,
                 context->keyboard->IsConnected());
-            if (delta.HasMovement()) {
-                context->keyboard->SendMouseMove(delta.x, delta.y);
-            }
+            // A zero delta still gives the BLE transport a chance to drain a
+            // coalesced movement chunk after a temporary notification backoff.
+            context->keyboard->SendMouseMove(delta.x, delta.y);
 
             vTaskDelay(pdMS_TO_TICKS(kTouchPollMs));
             continue;

@@ -1,6 +1,6 @@
 # main 固件组件开发指南
 
-> 最后更新：2026-08-08
+> 最后更新：2026-08-19
 > 位置：`main/`
 
 ## 1. 概述
@@ -39,6 +39,9 @@
 - 当前目标是 ESP32-C6 / ESP-IDF 5.5.3。Mic 的正式实时链路依赖 lwIP/Wi-Fi、
   ESP-SR `ns_create(10)` 和 ES7210 双通道采集，不依赖 Opus 或 NimBLE；仓库中的
   Opus/NimBLE 配置仍分别供小智语音与 BLE 键鼠应用使用。
+- BLE 触控板不得在通知暂时失败时丢弃位移；`mouse_move_accumulator.cc` 负责
+  有界合并并按 HID 范围排空，必须加入 `main/CMakeLists.txt`，纯逻辑回归见
+  `mouse_move_accumulator_test.cc`。
 - `Settings` 只有以 `read_write=true` 打开时才允许写入；提交发生在析构阶段，模式切换代码则直接使用 NVS 并在重启前显式提交。
 - `main/CMakeLists.txt` 面向多个板型；修改公共 codec 构造器时必须保持默认参数兼容已有板级调用。
 - 不得在小智、Recorder 或 Mic 模式安装同步 SD 日志 hook；这些模式的串口日志不能与共享 SPI2 的显示/SD 数据路径竞争。

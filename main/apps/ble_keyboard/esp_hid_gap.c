@@ -852,25 +852,17 @@ nimble_hid_gap_event(struct ble_gap_event *event, void *arg)
                 event->connect.status == 0 ? "established" : "failed",
                 event->connect.status);
         if (event->connect.status == 0) {
-            const struct ble_gap_upd_params stable_params = {
-                .itvl_min = 0x000C,            // 15 ms
-                .itvl_max = 0x0018,            // 30 ms
-                .latency = 0,
-                .supervision_timeout = 600,    // 6 seconds
-                .min_ce_len = 0,
-                .max_ce_len = 0,
-            };
-            rc = ble_gap_update_params(
-                event->connect.conn_handle, &stable_params);
-            if (rc != 0) {
-                ESP_LOGW(TAG,
-                         "NimBLE stable parameter request failed: %d",
-                         rc);
-            }
             /* HID pairing must become an encrypted, bonded connection. Without
              * an explicit security request macOS can hold a temporary GATT
              * link while its UI spins, then terminate it without saving the
-             * keyboard/mouse. Level 2 remains Just Works: no PIN or MITM. */
+             * keyboard/mouse. Level 2 remains Just Works: no PIN or MITM.
+             *
+             * Do not start a peripheral connection-parameter procedure here.
+             * macOS starts encryption and its own low-latency HID update at
+             * the same time; two concurrent LL procedures produce HCI 0x2a
+             * transaction collisions. The completed host update is followed
+             * below by a stable-timeout request; negotiable peer requests are
+             * also constrained in BLE_GAP_EVENT_CONN_UPDATE_REQ. */
             rc = ble_gap_security_initiate(event->connect.conn_handle);
             if (rc != 0 && rc != BLE_HS_EALREADY) {
                 ESP_LOGW(TAG,
@@ -885,9 +877,77 @@ nimble_hid_gap_event(struct ble_gap_event *event, void *arg)
 
         return 0;
     case BLE_GAP_EVENT_CONN_UPDATE:
-        /* The central has updated the connection parameters. */
-        ESP_LOGI(TAG, "connection updated; status=%d",
-                event->conn_update.status);
+        rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
+        if (rc == 0) {
+            ESP_LOGI(TAG,
+                     "connection updated; status=%d interval=%u(1.25ms) "
+                     "latency=%u timeout=%u(10ms)",
+                     event->conn_update.status,
+                     desc.conn_itvl,
+                     desc.conn_latency,
+                     desc.supervision_timeout);
+            /* A macOS central can apply its 15 ms / 720 ms parameters with a
+             * legacy LL connection update indication.  That path does not
+             * generate BLE_GAP_EVENT_CONN_UPDATE_REQ on the peripheral, so
+             * there is no request payload for us to constrain beforehand.
+             *
+             * Wait until the central's procedure has completed (this event),
+             * then start our own update while preserving the negotiated HID
+             * interval.  This avoids the CONNECT-time transaction collision
+             * while replacing the fragile 720 ms supervision window. */
+            if (event->conn_update.status == 0 &&
+                desc.supervision_timeout < 400) {
+                const struct ble_gap_upd_params stable_params = {
+                    .itvl_min = desc.conn_itvl,
+                    .itvl_max = desc.conn_itvl,
+                    .latency = desc.conn_latency,
+                    .supervision_timeout = 600,
+                    .min_ce_len = 0,
+                    .max_ce_len = 0,
+                };
+                rc = ble_gap_update_params(
+                    event->conn_update.conn_handle, &stable_params);
+                if (rc == 0) {
+                    ESP_LOGI(TAG,
+                             "requested post-update supervision timeout "
+                             "%u->600(10ms) at interval=%u(1.25ms)",
+                             desc.supervision_timeout,
+                             desc.conn_itvl);
+                } else if (rc != BLE_HS_EALREADY) {
+                    ESP_LOGW(TAG,
+                             "post-update stable parameter request failed: %d",
+                             rc);
+                }
+            }
+        } else {
+            ESP_LOGI(TAG, "connection updated; status=%d desc_err=%d",
+                     event->conn_update.status, rc);
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_CONN_UPDATE_REQ:
+    case BLE_GAP_EVENT_L2CAP_UPDATE_REQ:
+        /* macOS selects the desired 15 ms low-latency HID interval but also
+         * supplies a very short 720 ms supervision timeout. Preserve its
+         * interval while extending only the recovery window. This response is
+         * part of the host's procedure, so it cannot collide with encryption
+         * or a second local LL connection update. */
+        if (event->conn_update_req.peer_params != NULL &&
+            event->conn_update_req.self_params != NULL) {
+            *event->conn_update_req.self_params =
+                *event->conn_update_req.peer_params;
+            event->conn_update_req.self_params->latency = 0;
+            if (event->conn_update_req.self_params->supervision_timeout < 400) {
+                event->conn_update_req.self_params->supervision_timeout = 600;
+            }
+            ESP_LOGI(TAG,
+                     "connection update request interval=%u-%u(1.25ms) "
+                     "timeout=%u->%u(10ms)",
+                     event->conn_update_req.peer_params->itvl_min,
+                     event->conn_update_req.peer_params->itvl_max,
+                     event->conn_update_req.peer_params->supervision_timeout,
+                     event->conn_update_req.self_params->supervision_timeout);
+        }
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:

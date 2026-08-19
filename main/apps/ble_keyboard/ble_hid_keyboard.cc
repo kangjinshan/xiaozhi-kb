@@ -25,6 +25,13 @@
 
 #define TAG "ble_hid_kb"
 
+namespace {
+
+constexpr int64_t kMouseSendBackoffUs = 100 * 1000;
+constexpr int64_t kMouseStatsLogIntervalUs = 10 * 1000 * 1000;
+
+}  // namespace
+
 // 官方 esp_hid_device 示例的 GAP 处理（esp_hid_gap.c）在 BLE 认证完成事件里会调用
 // ble_hid_task_start_up() 启动示例自带的发送线程。该函数原本定义在示例 main.c 中，
 // 拷贝 GAP 文件时没有一并带入，全工程无定义。本封装改用 HID 事件回调跟踪连接，不需要
@@ -212,6 +219,12 @@ void BleHidKeyboard::OnConnectChange(bool connected) {
             // replaying state accumulated while disconnected.
             std::memset(report_, 0, sizeof(report_));
             mouse_buttons_ = 0;
+            mouse_move_accumulator_.Reset();
+            mouse_reports_sent_ = 0;
+            mouse_reports_failed_ = 0;
+            mouse_moves_coalesced_ = 0;
+            mouse_pending_clamped_ = 0;
+            mouse_stats_last_log_us_ = 0;
         }
     }
     mouse_send_backoff_until_us_.store(0);
@@ -339,28 +352,90 @@ void BleHidKeyboard::TapKey(uint8_t keycode) {
 }
 
 void BleHidKeyboard::SendMouseMove(int8_t dx, int8_t dy, int8_t wheel) {
-    if (dx == 0 && dy == 0 && wheel == 0) {
-        return;
-    }
-
     const int64_t now_us = esp_timer_get_time();
-    if (now_us < mouse_send_backoff_until_us_.load()) {
-        return;
-    }
-
-    uint8_t buttons = 0;
+    bool log_stats = false;
+    uint32_t reports_sent = 0;
+    uint32_t reports_failed = 0;
+    uint32_t moves_coalesced = 0;
+    uint32_t pending_clamped = 0;
+    int32_t pending_x = 0;
+    int32_t pending_y = 0;
     {
         ReportLock lock;
         if (!lock.locked()) {
             return;
         }
-        buttons = mouse_buttons_;
+
+        if (!connected_.load()) {
+            mouse_move_accumulator_.Reset();
+            return;
+        }
+
+        const bool has_new_movement = dx != 0 || dy != 0 || wheel != 0;
+        if (has_new_movement) {
+            if (mouse_move_accumulator_.HasPending()) {
+                ++mouse_moves_coalesced_;
+            }
+            if (mouse_move_accumulator_.Add(dx, dy, wheel)) {
+                ++mouse_pending_clamped_;
+            }
+        }
+
+        if (now_us >= mouse_send_backoff_until_us_.load()) {
+            const MouseMoveChunk chunk = mouse_move_accumulator_.PeekChunk();
+            if (chunk.HasMovement()) {
+                if (SendMouseReport(
+                        mouse_buttons_, chunk.x, chunk.y, chunk.wheel)) {
+                    mouse_move_accumulator_.Commit(chunk);
+                    ++mouse_reports_sent_;
+                } else {
+                    // Keep the complete movement pending. Future 20 ms touch
+                    // polls continue coalescing while the transport gets a
+                    // bounded quiet period instead of dropping cursor travel.
+                    ++mouse_reports_failed_;
+                    mouse_send_backoff_until_us_.store(
+                        now_us + kMouseSendBackoffUs);
+                }
+            }
+        }
+
+        const bool has_activity = mouse_reports_sent_ != 0 ||
+                                  mouse_reports_failed_ != 0 ||
+                                  mouse_move_accumulator_.HasPending();
+        if (has_activity &&
+            now_us - mouse_stats_last_log_us_ >=
+                kMouseStatsLogIntervalUs) {
+            mouse_stats_last_log_us_ = now_us;
+            log_stats = true;
+            reports_sent = mouse_reports_sent_;
+            reports_failed = mouse_reports_failed_;
+            moves_coalesced = mouse_moves_coalesced_;
+            pending_clamped = mouse_pending_clamped_;
+            pending_x = mouse_move_accumulator_.pending_x();
+            pending_y = mouse_move_accumulator_.pending_y();
+        }
     }
-    if (!SendMouseReport(buttons, dx, dy, wheel)) {
-        // A transport can reject a report while its notification buffers are
-        // congested. Do not turn that transient into a 50-100 Hz retry storm.
-        mouse_send_backoff_until_us_.store(now_us + 100 * 1000);
+
+    if (log_stats) {
+        ESP_LOGI(TAG,
+                 "mouse transport sent=%lu failed=%lu coalesced=%lu "
+                 "clamped=%lu pending=(%ld,%ld)",
+                 static_cast<unsigned long>(reports_sent),
+                 static_cast<unsigned long>(reports_failed),
+                 static_cast<unsigned long>(moves_coalesced),
+                 static_cast<unsigned long>(pending_clamped),
+                 static_cast<long>(pending_x),
+                 static_cast<long>(pending_y));
     }
+}
+
+void BleHidKeyboard::CancelPendingMouseMove() {
+    ReportLock lock;
+    if (!lock.locked()) {
+        return;
+    }
+    mouse_move_accumulator_.Reset();
+    mouse_send_backoff_until_us_.store(0);
 }
 
 void BleHidKeyboard::SendMouseButton(uint8_t button_mask, bool pressed) {
