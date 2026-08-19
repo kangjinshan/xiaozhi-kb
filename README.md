@@ -183,13 +183,13 @@ macOS 默认输入切换只影响随后创建的音频会话，不能强制已�
 
 触控板数据链：
 
-- CST9217 以 50 Hz 读取校准后的绝对坐标，再转换成相对 HID 位移；慢速拖动保持精细，快速拖动使用有界加速。
+- CST9217 约以 33 Hz 读取校准后的绝对坐标，再转换成相对 HID 位移；慢速拖动保持精细，快速拖动使用有界加速。坐标差会跨采样完整累计，降低通知频率不会缩短鼠标行程，并可避免 ESP32-C6 控制器长期入队快于排空后出现数十秒限流停顿。
 - 新触点只建立坐标锚点，因此轻点触摸屏不会产生九宫格按键、鼠标点击或光标跳变。
 - PWR 切换亮暗屏后必须先抬起手指再接受新模式输入，防止亮屏拖动在切到暗屏后误触键盘。
-- BLE HID 使用 ESP-IDF 自带的 Apache NimBLE 后端，通知路径非阻塞；先让 macOS 完成 15 ms 低延迟 HID 更新，若完成后 supervision timeout 仍是过短的 720 ms，再由外设保持同一 interval 跟进请求 6 秒，避免在加密期间并发第二个 LL procedure 造成 transaction collision。通知缓冲暂时忙时退避 100 ms，期间把新位移有界累计并在恢复后按 HID 范围分片排空，不再直接丢失鼠标行程；每 10 秒最多输出一条发送/失败/合并/积压统计。
+- BLE HID 使用 ESP-IDF 自带的 Apache NimBLE 后端，通知路径非阻塞；先让 macOS 完成 15 ms 低延迟 HID 更新，若完成后 supervision timeout 仍是过短的 720 ms，再由外设保持同一 interval 跟进请求 6 秒，避免在加密期间并发第二个 LL procedure 造成 transaction collision。HID report 使用可安全处理 mbuf 分配失败的直接 GATT 路径，并为 NimBLE 小包池保留 8 个控制缓冲；水位不足时不再继续入队，而是把新位移有界累计并在恢复后分片排空，避免持续拖动耗尽缓冲后断言重启。每 10 秒最多输出一条发送/失败/限流/合并/积压/最低空闲缓冲统计。
 - 未连接时持续广播 `XiaoZhi KB`，不会沿用 ESP-IDF HID 示例的 180 秒广播超时；连接断开后自动恢复广播。
 - 广播数据和连接后的 GAP Device Name 都固定为 `XiaoZhi KB`，不会在 macOS 已连接列表里变成 NimBLE 默认名 `nimble`。
-- HID 使用 Just Works 的 Security Mode 1 Level 2（加密、无 PIN）并将 bond key 持久化到 NVS；连接建立后主动发起安全流程，避免 macOS 只建立临时 GATT 链路而一直显示“连接中”。
+- HID 使用 Just Works 的 Security Mode 1 Level 2（加密、无 PIN）并将 bond key 持久化到 NVS；连接后优先让 macOS 完成加密，仅当 1 秒后仍未加密时由设备补发安全请求，既支持首次配对又避免 bonded reconnect 上的并发 SMP 超时。
 
 升级到含鼠标 Report 的固件后，macOS 可能仍缓存旧 HID 描述符。若只看到键盘功能，请先在系统蓝牙设置中忽略 `XiaoZhi KB`，再重新配对。当前实现已通过主机回归和 ESP32-C6 完整构建；指针轴向、灵敏度和手感仍需在目标实机上完成最终验收。
 
@@ -411,6 +411,13 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/ble_keyboard/mouse_move_accumulator_test.cc \
   main/apps/ble_keyboard/mouse_move_accumulator.cc \
   -o /tmp/mouse_move_accumulator_test && /tmp/mouse_move_accumulator_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/ble_keyboard \
+  main/apps/ble_keyboard/hid_notification_flow_control_test.cc \
+  main/apps/ble_keyboard/hid_notification_flow_control.cc \
+  -o /tmp/hid_notification_flow_control_test && \
+  /tmp/hid_notification_flow_control_test
 
 c++ -std=c++17 -Wall -Wextra -Werror \
   -I main/apps/recorder \

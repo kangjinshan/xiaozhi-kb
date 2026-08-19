@@ -8,6 +8,8 @@
 #include <string.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include <stdatomic.h>
+#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -780,9 +782,73 @@ esp_err_t esp_hid_ble_gap_adv_start(void)
 
 #if CONFIG_BT_NIMBLE_ENABLED
 #define GATT_SVR_SVC_HID_UUID 0x1812
+#define HID_SECURITY_FALLBACK_DELAY_MS 1000
 
 extern void ble_hid_task_start_up(void);
+extern void ble_hid_transport_gap_connection_changed(uint16_t conn_handle,
+                                                     bool connected);
 static struct ble_hs_adv_fields fields;
+static atomic_uint_fast32_t security_request_generation = 0;
+
+struct delayed_security_request {
+    uint16_t conn_handle;
+    uint_fast32_t generation;
+};
+
+static void delayed_security_request_task(void *arg)
+{
+    struct delayed_security_request *request =
+        (struct delayed_security_request *)arg;
+    vTaskDelay(pdMS_TO_TICKS(HID_SECURITY_FALLBACK_DELAY_MS));
+
+    if (request->generation ==
+        atomic_load_explicit(&security_request_generation,
+                             memory_order_acquire)) {
+        struct ble_gap_conn_desc desc;
+        int rc = ble_gap_conn_find(request->conn_handle, &desc);
+        if (rc == 0 && !desc.sec_state.encrypted) {
+            rc = ble_gap_security_initiate(request->conn_handle);
+            if (rc != 0 && rc != BLE_HS_EALREADY) {
+                ESP_LOGW(TAG,
+                         "delayed NimBLE security request failed: %d",
+                         rc);
+            } else {
+                ESP_LOGI(TAG, "started delayed NimBLE security fallback");
+            }
+        } else if (rc == 0) {
+            ESP_LOGI(TAG,
+                     "peer encryption already active; security fallback skipped");
+        }
+    }
+
+    free(request);
+    vTaskDelete(NULL);
+}
+
+static void schedule_security_fallback(uint16_t conn_handle)
+{
+    const uint_fast32_t generation =
+        atomic_fetch_add_explicit(&security_request_generation,
+                                  1,
+                                  memory_order_acq_rel) + 1;
+    struct delayed_security_request *request =
+        (struct delayed_security_request *)malloc(sizeof(*request));
+    if (request == NULL) {
+        ESP_LOGW(TAG, "security fallback allocation failed");
+        return;
+    }
+    request->conn_handle = conn_handle;
+    request->generation = generation;
+    if (xTaskCreate(delayed_security_request_task,
+                    "hid_security",
+                    2048,
+                    request,
+                    5,
+                    NULL) != pdPASS) {
+        ESP_LOGW(TAG, "security fallback task creation failed");
+        free(request);
+    }
+}
 
 esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
 {
@@ -852,28 +918,32 @@ nimble_hid_gap_event(struct ble_gap_event *event, void *arg)
                 event->connect.status == 0 ? "established" : "failed",
                 event->connect.status);
         if (event->connect.status == 0) {
-            /* HID pairing must become an encrypted, bonded connection. Without
-             * an explicit security request macOS can hold a temporary GATT
-             * link while its UI spins, then terminate it without saving the
-             * keyboard/mouse. Level 2 remains Just Works: no PIN or MITM.
+            ble_hid_transport_gap_connection_changed(
+                event->connect.conn_handle, true);
+            /* HID pairing must become an encrypted, bonded connection. macOS
+             * normally starts encryption immediately, so starting the same
+             * procedure here creates a redundant SMP transaction that fails
+             * about 30 seconds later and destabilizes the live session.
              *
-             * Do not start a peripheral connection-parameter procedure here.
-             * macOS starts encryption and its own low-latency HID update at
-             * the same time; two concurrent LL procedures produce HCI 0x2a
-             * transaction collisions. The completed host update is followed
-             * below by a stable-timeout request; negotiable peer requests are
-             * also constrained in BLE_GAP_EVENT_CONN_UPDATE_REQ. */
-            rc = ble_gap_security_initiate(event->connect.conn_handle);
-            if (rc != 0 && rc != BLE_HS_EALREADY) {
-                ESP_LOGW(TAG,
-                         "NimBLE security request failed: %d",
-                         rc);
-            }
+             * Give the central one second to finish. The delayed fallback
+             * initiates security only for a genuinely unencrypted first-time
+             * connection, preserving pairing without competing with a bonded
+             * reconnect. */
+            schedule_security_fallback(event->connect.conn_handle);
+        } else {
+            atomic_fetch_add_explicit(&security_request_generation,
+                                      1,
+                                      memory_order_acq_rel);
         }
         return 0;
         break;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnect; reason=%d", event->disconnect.reason);
+        ble_hid_transport_gap_connection_changed(
+            event->disconnect.conn.conn_handle, false);
+        atomic_fetch_add_explicit(&security_request_generation,
+                                  1,
+                                  memory_order_acq_rel);
 
         return 0;
     case BLE_GAP_EVENT_CONN_UPDATE:

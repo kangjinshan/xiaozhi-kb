@@ -23,7 +23,12 @@
 
 namespace {
 
-constexpr uint32_t kTouchPollMs = 20;
+// Sustained 50 Hz notifications eventually fill the ESP32-C6 controller's
+// ACL/MSYS pipeline even though each individual enqueue succeeds. At that
+// point safe backpressure prevents a crash but the pointer pauses until the
+// controller drains. 33 Hz stays below the measured long-run drain rate while
+// TouchpadMotion preserves the complete coordinate delta between samples.
+constexpr uint32_t kTouchPollMs = 30;
 constexpr uint32_t kRepeatMs = 120;
 constexpr uint32_t kTouchReadWarnMs = 1000;
 constexpr uint32_t kPmicReadWarnMs = 1000;

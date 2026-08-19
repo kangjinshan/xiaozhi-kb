@@ -18,6 +18,7 @@ AMOLED 2.16 作为单连接 BLE HID 键盘与相对鼠标。亮屏时 CST9217 �
 | `keyboard_app.cc` | 键鼠应用入口、BLE/显示/SD 初始化、物理左右键绑定和心跳 | `RunKeyboardApp()` |
 | `ble_hid_keyboard.*` | Report ID 1 键盘、Report ID 2 相对鼠标、连接状态和非阻塞发送 | `BleHidKeyboard::Init()`、`TapKey()`、`SendMouseMove()`、`SendMouseButton()` |
 | `esp_hid_gap.*` | Apache NimBLE GAP、持续广播、Just Works bonding 和主机驱动的稳定连接参数 | `esp_hid_gap_init()`、`esp_hid_ble_gap_adv_init()`、`esp_hid_ble_gap_adv_start()` |
+| `hid_notification_flow_control.*` | 根据 NimBLE MSYS 总水位为小包池保留控制缓冲，阻止通知入队耗尽触发断言 | `HidNotificationHasBufferHeadroom()` |
 | `keyboard_touch_arrows.*` | I2C0/PMIC/CST9217 初始化、50 Hz 轮询、模式切换、电量采样和 HID 调度 | `StartKeyboardTouchArrows()`、`TouchArrowTask()`、`ReadKeyboardTouch()`、`ReadAxp2101BatteryLevel()` |
 | `keyboard_zone_display.*` | SPI2/SH8601/LVGL 独立初始化、亮灭屏、九宫格和电量标签 | `KeyboardInputModeDisplayToggle()`、`KeyboardZoneDisplaySetBatteryLevel()` |
 | `keyboard_touch_action.*` | profile 与九宫格坐标到键盘动作的纯映射 | `MapTouchPointToKeyboardAction()` |
@@ -32,7 +33,7 @@ AMOLED 2.16 作为单连接 BLE HID 键盘与相对鼠标。亮屏时 CST9217 �
 - **启动键鼠应用**：`RunKeyboardApp()` → `BleHidKeyboard::Init()` →
   `KeyboardZoneDisplayPrepareSharedSpiBus()` → `SdCardMount(false)` →
   `StartKeyboardTouchArrows()` → 建立物理按键回调并进入 5 秒心跳。
-- **亮屏触控板**：`TouchArrowTask()` → 在 I2C 锁内
+- **亮屏触控板**：`TouchArrowTask()` 约 33 Hz 轮询 → 在 I2C 锁内
   `ReadKeyboardTouch()` 并完成 CST9217 ACK → 释放 I2C 锁 →
   `TouchpadMotion::Update()` → `BleHidKeyboard::SendMouseMove()`；即使当前
   触摸增量为零，也会尝试排空先前因通知拥塞暂存的位移。
@@ -59,11 +60,16 @@ AMOLED 2.16 作为单连接 BLE HID 键盘与相对鼠标。亮屏时 CST9217 �
   `CONFIG_LV_FONT_MONTSERRAT_16=y`。
 - GPIO：BOOT/GPIO9 为鼠标左键，GPIO10 为鼠标右键；GPIO12/13 是 USB，
   不得用于按键。
-- 鼠标通知：发送失败后保持至少 100 ms 退避；退避期间继续把位移累计到
-  `MouseMoveAccumulator`，单轴最多保留 1024，相反方向可抵消，恢复后每个
-  触摸 tick 最多发送一个 HID 分片。断连和亮暗屏切换会清除残留位移。
-- 连接参数：CONNECT 事件只发起安全流程，不同时主动发起本地参数更新；macOS
-  先完成自己的 15 ms HID 更新，`CONN_UPDATE` 完成事件若仍显示低于 4 秒的
+- 鼠标通知：项目在 GATT 注册时捕获键盘/鼠标 input characteristic handle，直接
+  使用可返回 `nullptr` 的 NimBLE mbuf API，禁止重新走 ESP-IDF HID 封装中
+  `assert(om != NULL)` 的发送路径。以每次连接观察到的 MSYS 总空闲高水位为基准，
+  最多允许消耗 MSYS_1 中除 8 个保留块外的容量；低于水位时退避 20 ms，
+  其他发送失败退避 100 ms。
+  退避期间继续把位移累计到 `MouseMoveAccumulator`，单轴最多保留 1024，
+  相反方向可抵消，恢复后每个触摸 tick 最多发送一个 HID 分片。断连和亮暗屏
+  切换会清除残留位移。
+- 连接参数：CONNECT 事件延迟 1 秒检查安全状态，仅在 macOS 尚未完成加密时
+  补发安全请求，且不同时主动发起本地参数更新；macOS 先完成自己的 15 ms HID 更新，`CONN_UPDATE` 完成事件若仍显示低于 4 秒的
   supervision timeout，外设才以相同 interval 跟进请求 6 秒。`CONN_UPDATE_REQ`
   约束仅作可协商路径的提前保护。禁止恢复 CONNECT 中并发
   `ble_gap_update_params()`，否则会与加密/主机更新发生 HCI `0x2a` transaction
@@ -79,8 +85,9 @@ AMOLED 2.16 作为单连接 BLE HID 键盘与相对鼠标。亮屏时 CST9217 �
   `DrawZoneGuideLocked()` 的标签与 `TouchArrowTask()` 的按住/重复逻辑。
 - 调整鼠标手感：修改 `TouchpadMotionConfig`，运行
   `touchpad_motion_test.cc`，真机检查慢速精细移动、快速加速、抬手重按和跳点；
-  修改拥塞处理时还要运行 `mouse_move_accumulator_test.cc`，并观察串口
-  `mouse transport` 的 failed/coalesced/pending 统计。
+  修改拥塞处理时还要运行 `mouse_move_accumulator_test.cc` 和
+  `hid_notification_flow_control_test.cc`，并观察串口 `mouse transport` 的
+  failed/throttled/coalesced/pending/msys_min_free 统计。
 - 修改 BLE report map 或配对：从 `kKeyboardMouseReportMap`、
   `s_hid_config` 和 `esp_hid_gap.c` 入手；真机前让 macOS 忽略旧设备并重新配对。
 - 修改 PWR 行为：同时检查 `keyboard_pmic_power_key.*`、
@@ -96,6 +103,7 @@ AMOLED 2.16 作为单连接 BLE HID 键盘与相对鼠标。亮屏时 CST9217 �
 | 改 HID 描述符但沿用主机缓存 | 高 | 中：macOS 仍识别为旧键盘 | 忽略 `XiaoZhi KB` 后重新配对 |
 | 未编入新 LVGL 字体 | 中 | 中：编译期字体符号缺失 | 在 `sdkconfig.defaults` 固化字体并执行干净/完整构建 |
 | BLE 通知暂时拥塞后直接丢位移 | 中 | 中：长时间拖动逐渐跳顿 | 有界合并位移、100 ms 后分片排空，并用低频统计确认积压归零 |
+| NimBLE 小包池被连续通知耗尽 | 中 | 高：ESP-IDF HID 封装分配 mbuf 后断言并重启 | 直接安全分配、保留 8 个 MSYS_1 缓冲，水位不足时只累计不入队 |
 
 主机纯逻辑测试命令集中在根 `README.md` 的“测试”章节。涉及显示、I2C、
 BLE 或 SPI2 的修改除主机测试和 `idf.py build` 外，还必须真机检查

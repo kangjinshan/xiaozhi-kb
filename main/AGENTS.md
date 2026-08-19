@@ -26,7 +26,7 @@
 
 ## 3. 核心流程
 
-- **启动分派**：`app_main()` → `AppModeRead()` → `RunKeyboardApp()` / `RunRecorderApp()` / `StartMicApp()` / `RunAppSelector()` / `Application::Run()`；Mic 创建 40 KiB 独立任务后 `app_main` 返回，以容纳 ESP-SR 与实时 UDP 工作帧。
+- **启动分派**：`app_main()` 先记录 `esp_reset_reason()`，再经 `AppModeRead()` → `RunKeyboardApp()` / `RunRecorderApp()` / `StartMicApp()` / `RunAppSelector()` / `Application::Run()`；Mic 创建 40 KiB 独立任务后 `app_main` 返回，以容纳 ESP-SR 与实时 UDP 工作帧。
 - **小智语音**：`Application::Initialize()` → `Board::StartNetwork()` → `InitializeProtocol()` → `Application::Run()` 消费事件位并驱动 `AudioService`。
 - **模式切换**：选择器触摸回调 → `AppModeWriteAndReboot()` → NVS `appsel/mode` 提交 → `esp_restart()` → 新模式入口。
 - **Mic 音频**：`RunMicApp()` → `BoxAudioCodec` 双通道采集 → `MicStereoProcessor` → Wi-Fi UDP 实时 PCM 与可选 SD WAV 两个并行消费者；START/STOP 只影响后者。

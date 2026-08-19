@@ -2,6 +2,7 @@
 #define BLE_HID_KEYBOARD_H_
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <utility>
@@ -22,6 +23,15 @@
 constexpr uint8_t HID_MOUSE_BUTTON_LEFT = 0x01;
 constexpr uint8_t HID_MOUSE_BUTTON_RIGHT = 0x02;
 constexpr uint8_t HID_MOUSE_BUTTON_MIDDLE = 0x04;
+
+enum class HidReportSendResult {
+    kSent,
+    kNotConnected,
+    kNotReady,
+    kNoBufferHeadroom,
+    kNoMemory,
+    kTransportError,
+};
 
 // BLE HID 键盘 + 鼠标复合设备封装（单例）。
 // 键盘 report_id = 1；相对鼠标 report_id = 2。两者共用一个 BLE HID
@@ -64,18 +74,26 @@ private:
     BleHidKeyboard& operator=(const BleHidKeyboard&) = delete;
 
     void SendKeyboardReport(uint8_t report[8]);
-    bool SendMouseReport(uint8_t buttons,
-                         int8_t dx,
-                         int8_t dy,
-                         int8_t wheel);
+    HidReportSendResult SendHidReport(uint8_t report_id,
+                                      uint8_t* data,
+                                      size_t length,
+                                      int* free_msys_buffers = nullptr);
+    HidReportSendResult SendMouseReport(uint8_t buttons,
+                                        int8_t dx,
+                                        int8_t dy,
+                                        int8_t wheel,
+                                        int* free_msys_buffers = nullptr);
 
     uint8_t report_[8] = {0};   // [modifier, reserved, key1..key6]
     uint8_t mouse_buttons_ = 0;
+    bool mouse_button_report_pending_ = false;
     MouseMoveAccumulator mouse_move_accumulator_;
     uint32_t mouse_reports_sent_ = 0;
     uint32_t mouse_reports_failed_ = 0;
+    uint32_t mouse_reports_throttled_ = 0;
     uint32_t mouse_moves_coalesced_ = 0;
     uint32_t mouse_pending_clamped_ = 0;
+    int32_t mouse_msys_min_free_ = INT32_MAX;
     int64_t mouse_stats_last_log_us_ = 0;
     bool inited_ = false;
     std::atomic_bool connected_{false};

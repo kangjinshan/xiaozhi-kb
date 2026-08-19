@@ -1,5 +1,6 @@
 #include "ble_hid_keyboard.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include <freertos/FreeRTOS.h>
@@ -11,24 +12,90 @@
 
 #include "esp_hidd.h"
 #if CONFIG_BT_NIMBLE_ENABLED
+#include "host/ble_gatt.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
+#include "host/ble_hs_mbuf.h"
 #include "host/ble_store.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "os/os_mbuf.h"
 #include "services/gap/ble_svc_gap.h"
+#include "services/hid/ble_svc_hid.h"
 #else
 #include "esp_gatts_api.h"
 #include "esp_hidd_gatts.h"
 #endif
 #include "esp_hid_gap.h"
+#include "hid_notification_flow_control.h"
 
 #define TAG "ble_hid_kb"
 
 namespace {
 
 constexpr int64_t kMouseSendBackoffUs = 100 * 1000;
+constexpr int64_t kMouseMsysRetryBackoffUs = 20 * 1000;
 constexpr int64_t kMouseStatsLogIntervalUs = 10 * 1000 * 1000;
+
+#if CONFIG_BT_NIMBLE_ENABLED
+constexpr int kNimbleSmallPoolReserve = 8;
+
+std::atomic<uint16_t> s_nimble_conn_handle{BLE_HS_CONN_HANDLE_NONE};
+std::atomic<uint8_t> s_nimble_protocol_mode{ESP_HID_PROTOCOL_MODE_REPORT};
+std::atomic<uint16_t> s_keyboard_report_handle{0};
+std::atomic<uint16_t> s_mouse_report_handle{0};
+std::atomic<uint16_t> s_boot_keyboard_report_handle{0};
+std::atomic<uint16_t> s_boot_mouse_report_handle{0};
+std::atomic<int> s_nimble_msys_high_watermark{0};
+ble_gatt_register_fn* s_hidd_gatts_register_cb = nullptr;
+void* s_hidd_gatts_register_arg = nullptr;
+int s_input_report_registration_index = 0;
+
+void CaptureHidGattHandle(struct ble_gatt_register_ctxt* ctxt, void*) {
+    if (s_hidd_gatts_register_cb != nullptr) {
+        s_hidd_gatts_register_cb(ctxt, s_hidd_gatts_register_arg);
+    }
+
+    if (ctxt == nullptr || ctxt->op != BLE_GATT_REGISTER_OP_CHR ||
+        ctxt->chr.chr_def == nullptr || ctxt->chr.svc_def == nullptr ||
+        ble_uuid_u16(ctxt->chr.svc_def->uuid) != BLE_SVC_HID_UUID16) {
+        return;
+    }
+
+    const uint16_t uuid = ble_uuid_u16(ctxt->chr.chr_def->uuid);
+    if (uuid == BLE_SVC_HID_CHR_UUID16_RPT &&
+        (ctxt->chr.chr_def->flags & BLE_GATT_CHR_F_NOTIFY) != 0) {
+        if (s_input_report_registration_index == 0) {
+            s_keyboard_report_handle.store(ctxt->chr.val_handle);
+            ESP_LOGI(TAG,
+                     "captured keyboard report handle=%u",
+                     ctxt->chr.val_handle);
+        } else if (s_input_report_registration_index == 1) {
+            s_mouse_report_handle.store(ctxt->chr.val_handle);
+            ESP_LOGI(TAG,
+                     "captured mouse report handle=%u",
+                     ctxt->chr.val_handle);
+        }
+        ++s_input_report_registration_index;
+    } else if (uuid == BLE_SVC_HID_CHR_UUID16_BOOT_KBD_INP) {
+        s_boot_keyboard_report_handle.store(ctxt->chr.val_handle);
+    } else if (uuid == BLE_SVC_HID_CHR_UUID16_BOOT_MOUSE_INP) {
+        s_boot_mouse_report_handle.store(ctxt->chr.val_handle);
+    }
+}
+
+void InstallHidGattHandleCapture() {
+    s_keyboard_report_handle.store(0);
+    s_mouse_report_handle.store(0);
+    s_boot_keyboard_report_handle.store(0);
+    s_boot_mouse_report_handle.store(0);
+    s_input_report_registration_index = 0;
+    s_hidd_gatts_register_cb = ble_hs_cfg.gatts_register_cb;
+    s_hidd_gatts_register_arg = ble_hs_cfg.gatts_register_arg;
+    ble_hs_cfg.gatts_register_cb = CaptureHidGattHandle;
+    ble_hs_cfg.gatts_register_arg = nullptr;
+}
+#endif
 
 }  // namespace
 
@@ -38,6 +105,18 @@ constexpr int64_t kMouseStatsLogIntervalUs = 10 * 1000 * 1000;
 // 那套发送线程，因此在这里补一个空桩，避免 Task 6 调用 Init() 拉入 GAP 链后出现
 // undefined reference to `ble_hid_task_start_up`。
 extern "C" void ble_hid_task_start_up(void) {}
+
+#if CONFIG_BT_NIMBLE_ENABLED
+extern "C" void ble_hid_transport_gap_connection_changed(
+    uint16_t conn_handle, bool connected) {
+    s_nimble_conn_handle.store(
+        connected ? conn_handle : BLE_HS_CONN_HANDLE_NONE);
+    s_nimble_msys_high_watermark.store(0);
+    if (!connected) {
+        s_nimble_protocol_mode.store(ESP_HID_PROTOCOL_MODE_REPORT);
+    }
+}
+#endif
 
 #if CONFIG_BT_NIMBLE_ENABLED
 extern "C" void ble_store_config_init(void);
@@ -204,6 +283,14 @@ static void hidd_event_cb(void* handler_args, esp_event_base_t base, int32_t id,
                 ESP_LOGE(TAG, "BLE advertising restart failed: %d", err);
             }
             break;
+#if CONFIG_BT_NIMBLE_ENABLED
+        case ESP_HIDD_PROTOCOL_MODE_EVENT:
+            s_nimble_protocol_mode.store(param->protocol_mode.protocol_mode);
+            ESP_LOGI(TAG,
+                     "HID protocol mode=%u",
+                     static_cast<unsigned>(param->protocol_mode.protocol_mode));
+            break;
+#endif
         default:
             break;
     }
@@ -219,11 +306,18 @@ void BleHidKeyboard::OnConnectChange(bool connected) {
             // replaying state accumulated while disconnected.
             std::memset(report_, 0, sizeof(report_));
             mouse_buttons_ = 0;
+            // After a new connection, send one neutral mouse state through
+            // the normal flow-controlled path. This clears any host-side
+            // button state and verifies that the captured report handle is
+            // usable even before the first physical movement.
+            mouse_button_report_pending_ = connected;
             mouse_move_accumulator_.Reset();
             mouse_reports_sent_ = 0;
             mouse_reports_failed_ = 0;
+            mouse_reports_throttled_ = 0;
             mouse_moves_coalesced_ = 0;
             mouse_pending_clamped_ = 0;
+            mouse_msys_min_free_ = INT32_MAX;
             mouse_stats_last_log_us_ = 0;
         }
     }
@@ -269,6 +363,12 @@ void BleHidKeyboard::Init() {
     dev_ = dev;
 
 #if CONFIG_BT_NIMBLE_ENABLED
+    // Capture the HID input characteristic handles while NimBLE registers the
+    // service. Sending directly to these handles lets us handle mbuf
+    // exhaustion as normal backpressure instead of entering esp_hid's
+    // assert(ble_hs_mbuf_from_flat(...) != nullptr) path.
+    InstallHidGattHandleCapture();
+
     // esp_nimble_init() only initializes the port. The host task must start
     // after the HID service installs ble_hs_cfg callbacks; otherwise the
     // sync callback and ESP_HIDD_START_EVENT never run, so no advertising is
@@ -296,12 +396,77 @@ void BleHidKeyboard::Init() {
 }
 
 void BleHidKeyboard::SendKeyboardReport(uint8_t report[8]) {
+    (void)SendHidReport(1, report, 8);
+}
+
+HidReportSendResult BleHidKeyboard::SendHidReport(
+    uint8_t report_id,
+    uint8_t* data,
+    size_t length,
+    int* free_msys_buffers) {
     if (dev_ == nullptr || !connected_.load()) {
-        return;
+        return HidReportSendResult::kNotConnected;
     }
-    // map_index = 0, report_id = 1, 8 字节标准键盘 report。
-    esp_hidd_dev_input_set(
-        static_cast<esp_hidd_dev_t*>(dev_), 0, 1, report, 8);
+
+#if CONFIG_BT_NIMBLE_ENABLED
+    const uint16_t conn_handle = s_nimble_conn_handle.load();
+    if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return HidReportSendResult::kNotConnected;
+    }
+
+    const int free_buffers = os_msys_num_free();
+    if (free_msys_buffers != nullptr) {
+        *free_msys_buffers = free_buffers;
+    }
+    int high_watermark = s_nimble_msys_high_watermark.load();
+    while (free_buffers > high_watermark &&
+           !s_nimble_msys_high_watermark.compare_exchange_weak(
+               high_watermark, free_buffers)) {
+    }
+    high_watermark = std::max(high_watermark, free_buffers);
+    if (!HidNotificationHasBufferHeadroom(
+            free_buffers,
+            high_watermark,
+            CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT,
+            kNimbleSmallPoolReserve)) {
+        return HidReportSendResult::kNoBufferHeadroom;
+    }
+
+    uint16_t attr_handle = 0;
+    size_t notification_length = length;
+    if (s_nimble_protocol_mode.load() == ESP_HID_PROTOCOL_MODE_BOOT) {
+        if (report_id == 1) {
+            attr_handle = s_boot_keyboard_report_handle.load();
+        } else if (report_id == 2) {
+            attr_handle = s_boot_mouse_report_handle.load();
+            notification_length = std::min<size_t>(notification_length, 3);
+        }
+    } else if (report_id == 1) {
+        attr_handle = s_keyboard_report_handle.load();
+    } else if (report_id == 2) {
+        attr_handle = s_mouse_report_handle.load();
+    }
+    if (attr_handle == 0) {
+        return HidReportSendResult::kNotReady;
+    }
+
+    struct os_mbuf* om = ble_hs_mbuf_from_flat(data, notification_length);
+    if (om == nullptr) {
+        return HidReportSendResult::kNoMemory;
+    }
+    const int rc = ble_gatts_notify_custom(conn_handle, attr_handle, om);
+    return rc == 0 ? HidReportSendResult::kSent
+                   : HidReportSendResult::kTransportError;
+#else
+    return esp_hidd_dev_input_set(
+               static_cast<esp_hidd_dev_t*>(dev_),
+               0,
+               report_id,
+               data,
+               length) == ESP_OK
+               ? HidReportSendResult::kSent
+               : HidReportSendResult::kTransportError;
+#endif
 }
 
 void BleHidKeyboard::SendModifier(uint8_t modifier_bits, bool pressed) {
@@ -356,10 +521,12 @@ void BleHidKeyboard::SendMouseMove(int8_t dx, int8_t dy, int8_t wheel) {
     bool log_stats = false;
     uint32_t reports_sent = 0;
     uint32_t reports_failed = 0;
+    uint32_t reports_throttled = 0;
     uint32_t moves_coalesced = 0;
     uint32_t pending_clamped = 0;
     int32_t pending_x = 0;
     int32_t pending_y = 0;
+    int32_t msys_min_free = -1;
     {
         ReportLock lock;
         if (!lock.locked()) {
@@ -383,11 +550,28 @@ void BleHidKeyboard::SendMouseMove(int8_t dx, int8_t dy, int8_t wheel) {
 
         if (now_us >= mouse_send_backoff_until_us_.load()) {
             const MouseMoveChunk chunk = mouse_move_accumulator_.PeekChunk();
-            if (chunk.HasMovement()) {
-                if (SendMouseReport(
-                        mouse_buttons_, chunk.x, chunk.y, chunk.wheel)) {
+            if (chunk.HasMovement() || mouse_button_report_pending_) {
+                int free_buffers = -1;
+                const HidReportSendResult result = SendMouseReport(
+                    mouse_buttons_,
+                    chunk.x,
+                    chunk.y,
+                    chunk.wheel,
+                    &free_buffers);
+                if (free_buffers >= 0) {
+                    mouse_msys_min_free_ = std::min<int32_t>(
+                        mouse_msys_min_free_, free_buffers);
+                }
+                if (result == HidReportSendResult::kSent) {
                     mouse_move_accumulator_.Commit(chunk);
+                    mouse_button_report_pending_ = false;
                     ++mouse_reports_sent_;
+                } else if (
+                    result == HidReportSendResult::kNoBufferHeadroom ||
+                    result == HidReportSendResult::kNoMemory) {
+                    ++mouse_reports_throttled_;
+                    mouse_send_backoff_until_us_.store(
+                        now_us + kMouseMsysRetryBackoffUs);
                 } else {
                     // Keep the complete movement pending. Future 20 ms touch
                     // polls continue coalescing while the transport gets a
@@ -401,6 +585,7 @@ void BleHidKeyboard::SendMouseMove(int8_t dx, int8_t dy, int8_t wheel) {
 
         const bool has_activity = mouse_reports_sent_ != 0 ||
                                   mouse_reports_failed_ != 0 ||
+                                  mouse_reports_throttled_ != 0 ||
                                   mouse_move_accumulator_.HasPending();
         if (has_activity &&
             now_us - mouse_stats_last_log_us_ >=
@@ -409,23 +594,30 @@ void BleHidKeyboard::SendMouseMove(int8_t dx, int8_t dy, int8_t wheel) {
             log_stats = true;
             reports_sent = mouse_reports_sent_;
             reports_failed = mouse_reports_failed_;
+            reports_throttled = mouse_reports_throttled_;
             moves_coalesced = mouse_moves_coalesced_;
             pending_clamped = mouse_pending_clamped_;
             pending_x = mouse_move_accumulator_.pending_x();
             pending_y = mouse_move_accumulator_.pending_y();
+            msys_min_free = mouse_msys_min_free_ == INT32_MAX
+                                 ? -1
+                                 : mouse_msys_min_free_;
         }
     }
 
     if (log_stats) {
         ESP_LOGI(TAG,
-                 "mouse transport sent=%lu failed=%lu coalesced=%lu "
-                 "clamped=%lu pending=(%ld,%ld)",
+                 "mouse transport sent=%lu failed=%lu throttled=%lu "
+                 "coalesced=%lu clamped=%lu pending=(%ld,%ld) "
+                 "msys_min_free=%ld",
                  static_cast<unsigned long>(reports_sent),
                  static_cast<unsigned long>(reports_failed),
+                 static_cast<unsigned long>(reports_throttled),
                  static_cast<unsigned long>(moves_coalesced),
                  static_cast<unsigned long>(pending_clamped),
                  static_cast<long>(pending_x),
-                 static_cast<long>(pending_y));
+                 static_cast<long>(pending_y),
+                 static_cast<long>(msys_min_free));
     }
 }
 
@@ -439,7 +631,6 @@ void BleHidKeyboard::CancelPendingMouseMove() {
 }
 
 void BleHidKeyboard::SendMouseButton(uint8_t button_mask, bool pressed) {
-    uint8_t buttons = 0;
     {
         ReportLock lock;
         if (!lock.locked()) {
@@ -451,29 +642,23 @@ void BleHidKeyboard::SendMouseButton(uint8_t button_mask, bool pressed) {
         } else {
             mouse_buttons_ &= static_cast<uint8_t>(~button_mask);
         }
-        buttons = mouse_buttons_;
+        mouse_button_report_pending_ = true;
     }
-    (void)SendMouseReport(buttons, 0, 0, 0);
+    SendMouseMove(0, 0, 0);
 }
 
-bool BleHidKeyboard::SendMouseReport(uint8_t buttons,
-                                     int8_t dx,
-                                     int8_t dy,
-                                     int8_t wheel) {
-    if (dev_ == nullptr || !connected_.load()) {
-        return false;
-    }
-
+HidReportSendResult BleHidKeyboard::SendMouseReport(
+    uint8_t buttons,
+    int8_t dx,
+    int8_t dy,
+    int8_t wheel,
+    int* free_msys_buffers) {
     uint8_t mouse_report[4] = {
         buttons,
         static_cast<uint8_t>(dx),
         static_cast<uint8_t>(dy),
         static_cast<uint8_t>(wheel),
     };
-    return esp_hidd_dev_input_set(
-               static_cast<esp_hidd_dev_t*>(dev_),
-               0,
-               2,
-               mouse_report,
-               sizeof(mouse_report)) == ESP_OK;
+    return SendHidReport(
+        2, mouse_report, sizeof(mouse_report), free_msys_buffers);
 }

@@ -26,7 +26,7 @@
 - **选择应用**：`RunAppSelector()` → `BuildSelectorUI()` → 点击 `SelectorButtonContext` → `AppModeWriteAndReboot()`。
 - **启动触摸保护**：四个按钮只接受 UI 完成一秒后新产生的 `PRESSED` → `CLICKED`；启动时 CST9217 遗留触点即使稍后释放也不能自动进入底部 Mic。
 - **读取模式**：`app_main()` → `AppModeRead()` 读取 `appsel/mode`；缺失或非法值一律回到 `kSelector`。
-- **键鼠 profile**：键鼠按钮调用 `AppModeWriteKeyboardAndReboot()`；历史 profile 在 `KeyboardProfileRead()` 中统一迁移为 profile 2。触控板报告暂时拥塞时由 BLE 子模块有界累计位移并在恢复后分片排空，模式切换时清除残留。
+- **键鼠 profile**：键鼠按钮调用 `AppModeWriteKeyboardAndReboot()`；历史 profile 在 `KeyboardProfileRead()` 中统一迁移为 profile 2。触控板报告暂时拥塞时由 BLE 子模块保留 NimBLE 控制缓冲、有界累计位移并在恢复后分片排空，模式切换时清除残留。
 - **Mic 启动**：Mic 按钮写入字符串 `mic` → 重启 → `StartMicApp()` 创建独立任务 → `RunMicApp()` 立即持续发送实时流，应用内 MENU 再写回 `selector`。
 
 ## 4. 关键资源与副作用
