@@ -33,6 +33,7 @@ struct AgentVoiceControl {
     std::string transcript;
     std::string reply_text;
     std::string server_time;
+    std::string download_path;
     std::string error_code;
     bool retryable = false;
 };
@@ -49,6 +50,10 @@ std::string AgentVoiceBuildPing();
 bool AgentVoiceParseControl(const std::string& json,
                             const std::string& expected_turn_id,
                             AgentVoiceControl* control);
+
+std::string AgentVoiceBuildReplyDownloadUrl(const std::string& websocket_url,
+                                           const std::string& download_path,
+                                           const std::string& turn_id);
 
 bool AgentVoiceSafeTurnId(const std::string& turn_id);
 bool AgentVoiceSha256Text(const std::string& sha256);

@@ -18,6 +18,7 @@
 #include "recorder_playback_stream.h"
 #include "recorder_turn_queue.h"
 #include "recorder_hold_input.h"
+#include "recorder_reply_download.h"
 #include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
@@ -516,6 +517,9 @@ void RunRecorderApp() {
     uint32_t heartbeat_seconds = 25;
     uint64_t next_ping_ms = RecorderMonotonicMs() + 10000;
     AgentVoiceControl reply_control;
+    RecorderReplyDownload reply_download;
+    uint64_t download_started_ms = 0;
+    uint64_t download_progress_ms = 0;
     uint64_t reply_received_bytes = 0;
     mbedtls_sha256_context reply_digest;
     bool reply_digest_active = false;
@@ -534,6 +538,7 @@ void RunRecorderApp() {
     };
 
     auto abort_reply = [&]() {
+        reply_download.Close();
         RecorderDisplayPause();
         turn_store.AbortReply();
         RecorderDisplayResume();
@@ -644,6 +649,47 @@ void RunRecorderApp() {
         ESP_LOGE(TAG, "Agent voice transfer failed: %s", reason);
         network.CloseSocket();
         schedule_reconnect(AgentVoiceEvent::kFailure);
+    };
+
+    auto finish_reply = [&]() {
+        reply_download.Close();
+        if (!reply_digest_active ||
+            reply_received_bytes != reply_control.bytes) {
+            fail_connection("reply ended before all bytes arrived");
+            return;
+        }
+        unsigned char digest[32];
+        const bool hash_ok =
+            mbedtls_sha256_finish(&reply_digest, digest) == 0;
+        mbedtls_sha256_free(&reply_digest);
+        reply_digest_active = false;
+        const std::string actual_sha256 = hash_ok
+            ? DigestHex(digest) : std::string();
+        RecorderDisplayPause();
+        const bool committed = hash_ok && turn_store.CommitReply(
+            reply_control.transcript,
+            reply_control.reply_text,
+            reply_received_bytes,
+            actual_sha256,
+            reply_control.server_time);
+        RecorderDisplayResume();
+        if (!committed) {
+            fail_connection("reply integrity check failed");
+            return;
+        }
+        const std::string completed_id = turn_queue.active().paths.turn_id;
+        const std::string completed_path = turn_queue.active().paths.assistant_wav;
+        automatic_play_paths.push_back(completed_path);
+        turn_queue.FinishActive();
+        AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStored);
+        sync_pending();
+        // The verified reply is already durable. ACK failure must not
+        // enqueue/replay the completed turn or lose its automatic audio.
+        if (!network.SendText(AgentVoiceBuildReplySaved(completed_id))) {
+            fail_connection("reply saved acknowledgement failed");
+        }
+        RenderAssistant(&ui_context);
+        ESP_LOGI(TAG, "Agent reply stored: %s", completed_path.c_str());
     };
 
     while (true) {
@@ -825,51 +871,29 @@ void RunRecorderApp() {
                     reply_digest_active = true;
                     reply_received_bytes = 0;
                     reply_control = frame;
+                    if (!frame.download_path.empty()) {
+                        const auto url = AgentVoiceBuildReplyDownloadUrl(
+                            CONFIG_AGENT_VOICE_URL, frame.download_path, frame.turn_id);
+                        if (url.empty() || !reply_download.Start(url, frame.bytes)) {
+                            fail_connection("reply HTTPS request failed");
+                            break;
+                        }
+                        download_started_ms = download_progress_ms = RecorderMonotonicMs();
+                        ESP_LOGI(TAG, "Agent reply HTTPS download started: %u bytes",
+                                 static_cast<unsigned>(frame.bytes));
+                    }
                     AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStarted);
                     sync_voice_control();
                     RenderAssistant(&ui_context);
                     break;
                 }
-                case AgentVoiceControlType::kReplyEnd: {
-                    if (!reply_digest_active ||
-                        reply_received_bytes != reply_control.bytes) {
-                        fail_connection("reply ended before all bytes arrived");
-                        break;
+                case AgentVoiceControlType::kReplyEnd:
+                    if (reply_download.active()) {
+                        fail_connection("unexpected WSS end during HTTPS download");
+                    } else {
+                        finish_reply();
                     }
-                    unsigned char digest[32];
-                    const bool hash_ok =
-                        mbedtls_sha256_finish(&reply_digest, digest) == 0;
-                    mbedtls_sha256_free(&reply_digest);
-                    reply_digest_active = false;
-                    const std::string actual_sha256 = hash_ok
-                        ? DigestHex(digest) : std::string();
-                    RecorderDisplayPause();
-                    const bool committed = hash_ok && turn_store.CommitReply(
-                        reply_control.transcript,
-                        reply_control.reply_text,
-                        reply_received_bytes,
-                        actual_sha256,
-                        reply_control.server_time);
-                    RecorderDisplayResume();
-                    if (!committed) {
-                        fail_connection("reply integrity check failed");
-                        break;
-                    }
-                    const std::string completed_id = turn_queue.active().paths.turn_id;
-                    const std::string completed_path = turn_queue.active().paths.assistant_wav;
-                    automatic_play_paths.push_back(completed_path);
-                    turn_queue.FinishActive();
-                    AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStored);
-                    sync_pending();
-                    // The verified reply is already durable. ACK failure must not
-                    // enqueue/replay the completed turn or lose its automatic audio.
-                    if (!network.SendText(AgentVoiceBuildReplySaved(completed_id))) {
-                        fail_connection("reply saved acknowledgement failed");
-                    }
-                    RenderAssistant(&ui_context);
-                    ESP_LOGI(TAG, "Agent reply stored: %s", completed_path.c_str());
                     break;
-                }
                 case AgentVoiceControlType::kError: {
                     if (frame.retryable) {
                         fail_connection("server requested retry");
@@ -1177,6 +1201,28 @@ void RunRecorderApp() {
             RecorderDisplayResume();
         }
 
+        if (reply_download.active()) {
+            const int count = reply_download.Read(upload_chunk.data(), upload_chunk.size());
+            bool stored = count >= 0;
+            if (count > 0) {
+                RecorderDisplayPause();
+                stored = turn_store.AppendReply(upload_chunk.data(), count);
+                RecorderDisplayResume();
+                stored = stored && mbedtls_sha256_update(
+                    &reply_digest, upload_chunk.data(), count) == 0;
+                reply_received_bytes += count;
+                download_progress_ms = RecorderMonotonicMs();
+            }
+            if (!stored || RecorderMonotonicMs() - download_progress_ms > 15000) {
+                fail_connection("reply HTTPS transfer interrupted");
+            } else if (reply_download.complete()) {
+                ESP_LOGI(TAG, "Agent reply HTTPS complete: %u bytes in %u ms",
+                    static_cast<unsigned>(reply_received_bytes),
+                    static_cast<unsigned>(RecorderMonotonicMs() - download_started_ms));
+                finish_reply();
+            }
+        }
+
         if (voice_state.phase == AgentVoicePhase::kOnline &&
             !turn_queue.empty() && network.IsSocketConnected()) {
             AgentVoiceReduce(&voice_state, AgentVoiceEvent::kTurnQueued);
@@ -1186,7 +1232,7 @@ void RunRecorderApp() {
         if (!upload_one_chunk()) fail_connection("WAV upload failed");
 
         if (control.mode == RecorderControlMode::kIdle) {
-            vTaskDelay(pdMS_TO_TICKS(upload_file != nullptr ? 1 : 10));  // 空闲时让出 CPU
+            vTaskDelay(pdMS_TO_TICKS((upload_file != nullptr || reply_download.active()) ? 1 : 10));  // 空闲时让出 CPU
         }
     }
 }

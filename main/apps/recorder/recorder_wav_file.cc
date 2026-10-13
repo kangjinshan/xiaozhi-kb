@@ -56,6 +56,7 @@ bool RecorderWavCanPlay(const RecorderWavInfo& info,
                         int output_sample_rate,
                         int output_channels) {
     const bool supported_rate =
+        info.sample_rate == 8000 ||
         info.sample_rate == 16000 ||
         info.sample_rate == static_cast<uint32_t>(output_sample_rate);
     return supported_rate &&

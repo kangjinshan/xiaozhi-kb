@@ -47,6 +47,11 @@ int main() {
     const auto up = ConvertInChunks(1600, 16000, 24000, 173);
     Check(up.size() == 2400, "16k to 24k count");
 
+    const auto up8 = ConvertInChunks(8000, 8000, 24000, 257);
+    const auto up8whole = ConvertInChunks(8000, 8000, 24000, 8000);
+    Check(up8.size() == 24000, "8 kHz to 24 kHz preserves one second");
+    Check(up8 == up8whole, "8 kHz playback has no chunk boundary gaps");
+
     RecorderRateConverter passthrough(24000, 24000);
     std::vector<int16_t> input = {1, -2, 3, -4};
     std::vector<int16_t> output;

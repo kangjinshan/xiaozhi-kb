@@ -265,6 +265,9 @@ void TestUnsupportedWavHeaderIsRejected() {
     Check(RecorderWavCanPlay(
               RecorderWavInfo{16000, 1, 16, 44, 32000}, 24000, 1),
           "enhanced 16k wav is playable through resampler");
+    Check(RecorderWavCanPlay(
+              RecorderWavInfo{8000, 1, 16, 44, 16000}, 24000, 1),
+          "8 kHz PCM16 mono is playable through the resampler");
     Check(!RecorderWavCanPlay(
               RecorderWavInfo{22050, 1, 16, 44, 44100}, 24000, 1),
           "unsupported sample rate is rejected");

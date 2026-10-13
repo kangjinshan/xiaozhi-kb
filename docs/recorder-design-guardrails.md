@@ -90,7 +90,7 @@ Current guard implementation:
 Agent voice additions keep the same SPI2 ownership rule:
 
 - WebSocket/Wi-Fi callbacks only copy bounded events; they never access FATFS, LVGL or the codec.
-- The recorder main task pauses LVGL around each SD read/write, then acknowledges a reply chunk only after its bytes are on the card.
+- The recorder main task pauses LVGL around each SD read/write. New firmware uses one authenticated same-origin HTTPS GET for the entire reply; bounded reads are local buffering, not extra download requests. Only the legacy WSS fallback sends a per-chunk ACK.
 - `assistant.wav.part` is never listed or played. Startup pending scans remove stale parts and request an idempotent replay.
 - Recorder input reserves DSP flush capacity below the 4 MiB protocol maximum and auto-stops at the limit.
 - Processor errors are not all equivalent. A control frame with `retryable=true` keeps the existing reconnect/replay path. A frame with `retryable=false` is terminal for the active turn: abort any partial reply, atomically persist `failed` plus the stable error code, clear the queued reducer state, and continue with the next pending turn or online idle. `ListPending()` must exclude `failed`, while its `user.wav` remains on SD for history and diagnosis.
@@ -274,3 +274,15 @@ continues to nest with SD read/write pauses.
 
 Offline end-to-end storage must accept the exact `unsynced` date produced by
 `RecorderTurnClock`; `agent_turn_store_test` checks creation and restart recovery.
+
+## Whole-file reply download (2.2.7)
+
+The user explicitly replaced stop-and-wait reply downloads with a single HTTPS GET.
+`RecorderReplyDownload` uses `esp_http_client`, the platform certificate bundle and the
+same device credential. It rejects redirects, non-200 status, incorrect Content-Length
+and non-matching turn paths. Reads are bounded, inactive reads yield after 40 ms, and
+15 seconds without progress triggers an idempotent retry of the already-created file.
+The complete byte count and SHA-256 must pass before atomic publication and playback.
+The old WSS path remains only for server compatibility and is covered by existing tests.
+8 kHz PCM16 mono playback is admitted and resampled to 24 kHz without changing capture
+or the default server TTS format.

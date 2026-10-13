@@ -1,7 +1,7 @@
 # 神勇设备语音模块
 
 本目录是 ESP32-C6 的独立神勇助手应用，持久模式键仍为 `recorder`。修改前阅读
-`docs/recorder-design-guardrails.md`，保留 SPI2、SD 原子发布、scrypt/WSS 认证与逐块 ACK。
+`docs/recorder-design-guardrails.md`，保留 SPI2、SD 原子发布和设备认证。新版一次 HTTPS GET 下载整段 WAV；旧 WSS 客户端的逐块 ACK 仅作兼容。
 
 - `recorder_display.cc`：静态神勇界面，仅有状态与大按钮，不提供历史；主按钮按下开始、释放或移出结束。回调只发布事件。
 - `recorder_hold_input.h`：统一实体 KEY 与触摸的按住/释放；暗屏触摸有 300 ms 门槛和残留触点抑制。暗屏只在主任务轮询 I2C，LVGL 保持暂停，录音不唤醒屏幕。
@@ -9,7 +9,8 @@
 - `recorder_assistant_ui.*`：纯展示映射；录音状态优先于前一条请求的错误提示，始终显示松开发送。
 - `recorder_app.cc`：唯一 SD/codec 主循环；每轮最多一个网络事件、一个 4096 字节上传块、一个 1024 样本播放块。上传缓冲区在堆上复用，TLS/JSON 工作需保留 main 栈余量。
 - `recorder_turn_queue.h`：在途队首固定，保存新的录音只追加，完成/终态失败后才出队。启动后不得再调用会清理 `.part` 的 `ListPending()`。
-- `recorder_playback_stream.*`：可暂停的 WAV 游标；与 resampler 一起跨录音保留，不读文件即暂停。录音时禁用输出，松手保存后自动续播，回复按完成顺序播放。
+- `recorder_reply_download.*`：使用严格同源 HTTPS 和原设备 Token，一次 GET 获取完整音频，有界读取到 SD，不发送逐块 ACK。拒绝重定向/错误状态/长度不符，15 秒无进度重连重取已完成 turn，不能调用模型重新生成。
+- `recorder_playback_stream.*`：可暂停的 8/16/24 kHz PCM16 单声道 WAV 游标；与 resampler 一起跨录音保留，不读文件即暂停。录音时禁用输出，松手保存后自动续播，回复按完成顺序播放。
 - `agent_voice_state.*`：只描述传输；播放开始/结束不能改写正在发送的下一条。
 - `/sdcard/shenyong/` 是当前专用根目录；旧金山 `/sdcard/agent` 与 `/sdcard/rec` 不导入、不自动重放、不删除。
 - `font_puhui_assistant_24_4.c` 与 `font_puhui_shenyong_36_4.c` 分别服务文案和主标题/按钮；更改中文文案后重新生成，不加载动态历史字体。

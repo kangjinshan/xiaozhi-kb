@@ -187,6 +187,18 @@ std::string AgentVoiceBuildPing() {
     return "{\"type\":\"ping\"}";
 }
 
+std::string AgentVoiceBuildReplyDownloadUrl(const std::string& websocket_url,
+                                           const std::string& download_path,
+                                           const std::string& turn_id) {
+    if (websocket_url.rfind("wss://", 0) != 0 || !AgentVoiceSafeTurnId(turn_id) ||
+        turn_id == "." || turn_id == ".." ||
+        download_path != "/api/device/voice/replies/" + turn_id) return {};
+    const size_t end = websocket_url.find('/', 6);
+    const std::string authority = websocket_url.substr(6, end - 6);
+    if (authority.empty() || authority.find_first_of("@?#\\ \r\n") != std::string::npos) return {};
+    return "https://" + authority + download_path;
+}
+
 bool AgentVoiceParseControl(const std::string& json,
                             const std::string& expected_turn_id,
                             AgentVoiceControl* control) {
@@ -253,7 +265,8 @@ bool AgentVoiceParseControl(const std::string& json,
             !AgentVoiceSha256Text(parsed.sha256) ||
             !ExtractString(json, "audio_format", &audio_format) ||
             audio_format != "wav-pcm-s16le" ||
-            !ExtractUint64(json, "sample_rate", &sample_rate) || sample_rate != 16000 ||
+            !ExtractUint64(json, "sample_rate", &sample_rate) ||
+            (sample_rate != 8000 && sample_rate != 16000) ||
             !ExtractUint64(json, "channels", &channels) || channels != 1 ||
             !ExtractString(json, "transcript", &parsed.transcript) ||
             !ExtractString(json, "reply_text", &parsed.reply_text) ||
@@ -261,6 +274,10 @@ bool AgentVoiceParseControl(const std::string& json,
             parsed.server_time.empty()) {
             return false;
         }
+        if (HasValue(json, "download_path") &&
+            (!ExtractString(json, "download_path", &parsed.download_path) ||
+             parsed.download_path != "/api/device/voice/replies/" + parsed.turn_id ||
+             parsed.turn_id == "." || parsed.turn_id == "..")) return false;
         parsed.type = AgentVoiceControlType::kReplyStart;
     } else if (type == "reply_end") {
         if (!ParseTurnId(json, expected_turn_id, &parsed.turn_id)) {

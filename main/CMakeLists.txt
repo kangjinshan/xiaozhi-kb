@@ -82,6 +82,7 @@ list(APPEND SOURCES "apps/recorder/agent_voice_state.cc")
 list(APPEND SOURCES "apps/recorder/agent_turn_store.cc")
 list(APPEND SOURCES "apps/recorder/agent_voice_protocol.cc")
 list(APPEND SOURCES "apps/recorder/recorder_network.cc")
+list(APPEND SOURCES "apps/recorder/recorder_reply_download.cc")
 
 # Real-time stereo Wi-Fi microphone — ES7210 MIC1/MIC2 + ESP-SR NS + UDP PCM.
 list(APPEND SOURCES "apps/mic/mic_app.cc")
@@ -986,6 +987,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_pm
                         esp_psram
                         esp_netif
+                        esp_http_client
                         esp_driver_gpio
                         esp_driver_uart
                         esp_driver_spi

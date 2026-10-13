@@ -58,7 +58,7 @@
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
   - 核心逻辑：持久 WSS、ready 帧用户时区时间基准、4096 字节有界传输、turn 幂等状态、服务端 `retryable` 失败分类和 SD 原子文件
-  - 副作用：将用户与助手 WAV/清单写入 `/sdcard/shenyong/`；回复块落卡后才发送累计字节 ACK；确定性失败保留用户 WAV、原子标记 `failed` 并退出待发送队列。
+  - 副作用：将用户与助手 WAV/清单写入 `/sdcard/shenyong/`；新版回复通过一次 HTTPS GET 流式落卡，无应用层分块 ACK；旧 WSS 回复落卡后才发送累计字节 ACK；确定性失败保留用户 WAV、原子标记 `failed` 并退出待发送队列。
 - **AMOLED 与 SD 卡共享 SPI2**
   - 入口：目标板构造函数和 `RecorderDisplayPause()` / `RecorderDisplayResume()`
   - 核心逻辑：SD 初始化或大块 I/O 前停止 LVGL 并取得 LVGL 锁；神勇 息屏额外持有一层可嵌套 pause，SH8601 命令只在 Recorder 主任务执行
@@ -98,7 +98,7 @@
   `assistant.wav` 必须通过 `.part` + 可恢复 `.bak` 交换发布；启动扫描要能从
   `turn.json.bak` 恢复，`.part` / `.bak` 永远不能播放。主机回归必须运行模拟
   `FR_EXIST` 的 `agent_turn_store_fatfs_test.cc`，不能只依赖 macOS 的 POSIX rename。
-- Agent 回复禁止在网络回调中直接写 SD；主任务每成功落卡一个块后发送 `reply_chunk_saved`，服务端收到精确累计字节 ACK 才能继续发送。`assistant.wav.part` 永远不可播放。
+- Agent 回复禁止在网络回调中直接写 SD。新版通过一次 HTTPS GET 下载，主任务有界写卡并验证完整长度/SHA-256 后原子发布；旧 WSS 协议保留 `reply_chunk_saved` 兼容。`assistant.wav.part` 永远不可播放。
 - 设备必须区分服务端终态失败与暂时失败：`retryable=false` 的当前 turn 要在主任务中原子标记 `failed`、清除 queued 状态并恢复录音；`ListPending()` 永远排除 `failed`，但不得删除其 `user.wav`。只有 `retryable=true` 才允许断线重放。
 - turn 日期和 ID 只能由纯 `RecorderTurnClock` 生成：认证 ready 帧的 Unix 毫秒与用户 UTC 偏移配合单调时钟得到本地 `YYYYMMDD`；未同步时使用八字符 `unsynced`。禁止恢复 `%llu` 格式化或把无效墙钟写成 `19700101`，ESP-IDF nano printf 不保证 64 位格式支持。
 - 神勇的 KEY/GPIO10 在亮暗屏均为按住录音、松开发送；BOOT 单击降音量、双击升音量。触摸和实体键通过 `RecorderHoldInput` 汇总，只有最后一个按住来源释放才停止录音。
@@ -134,3 +134,10 @@
 - 新增重要目录时应补建就近 `AGENTS.md`；重命名或删除文件后必须清理所有失效引用。
 - README 面向使用者，AGENTS 面向维护者；真机限制和高风险禁止事项应在两处保持一致。
 - 除非用户明确批准，不得把文档维护留到后续任务。
+
+## 2026-10-13 整段回复下载（2.2.7）
+
+用户明确要求去掉下载时的逐块确认。新固件声明 `Reply-Transport: http-download`，
+只接受当前 turn 的固定相对下载路径，从已配置 WSS origin 构造 HTTPS 请求。凭据不能发往
+外部 URL 或重定向。读取缓冲限制仍为 4096 字节，但整个文件仅一次 GET，无逐块请求或 ACK。
+录音和默认回复继续 16 kHz；播放器新增 8 kHz PCM16 单声道，经已有重采样器输出 24 kHz。

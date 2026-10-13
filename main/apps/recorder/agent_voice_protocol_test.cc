@@ -83,6 +83,22 @@ int main() {
     assert(control.reply_text == "你好呀");
     assert(control.server_time == "2026-07-12T10:00:00+08:00");
 
+    std::string download = reply.substr(0, reply.size()-1) +
+        R"(,"download_path":"/api/device/voice/replies/turn-1"})";
+    assert(AgentVoiceParseControl(download, "turn-1", &control));
+    assert(control.download_path == "/api/device/voice/replies/turn-1");
+    assert(AgentVoiceBuildReplyDownloadUrl("wss://agent.invalid/api/device/voice/ws",
+        control.download_path, "turn-1") == "https://agent.invalid/api/device/voice/replies/turn-1");
+    assert(AgentVoiceBuildReplyDownloadUrl("ws://agent.invalid/ws", control.download_path, "turn-1").empty());
+    assert(AgentVoiceBuildReplyDownloadUrl("wss://agent.invalid/ws", "https://other.invalid/private", "turn-1").empty());
+    assert(AgentVoiceBuildReplyDownloadUrl("wss://user@agent.invalid/ws", control.download_path, "turn-1").empty());
+    const std::string foreign = reply.substr(0, reply.size()-1) +
+        R"(,"download_path":"/api/device/voice/replies/other-turn"})";
+    assert(!AgentVoiceParseControl(foreign, "turn-1", &control));
+    auto reply8 = download;
+    reply8.replace(reply8.find("16000"), 5, "8000");
+    assert(AgentVoiceParseControl(reply8, "turn-1", &control));
+
     const std::string reply_without_server_time =
         std::string("{\"type\":\"reply_start\",\"turn_id\":\"turn-1\",") +
         "\"bytes\":2048,\"sha256\":\"" + std::string(64, 'b') +
