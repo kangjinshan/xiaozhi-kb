@@ -18,10 +18,10 @@ def test_complete_runtime_log_passes():
     output = "\n".join([
         "Agent voice Wi-Fi connected",
         "Agent voice WSS ready",
-        "Agent user AMR stored: /sdcard/shenyong/20260712/turn-redacted/user.wav",
+        "Agent user AMR stored: /sdcard/shenyong/20260712/turn-redacted/user.amr",
         "Agent accepted turn: turn-redacted",
-        "Agent reply stored: /sdcard/shenyong/20260712/turn-redacted/assistant.wav",
-        "Agent reply playback start: /sdcard/shenyong/20260712/turn-redacted/assistant.wav",
+        "Agent reply stored: /sdcard/shenyong/20260712/turn-redacted/assistant.amr",
+        "Agent reply playback start: /sdcard/shenyong/20260712/turn-redacted/assistant.amr",
     ])
     result = module.evaluate_log(output)
     assert result.ok

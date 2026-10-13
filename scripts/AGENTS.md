@@ -26,7 +26,7 @@
 | `verify_ble_keyboard_after_cold_boot.py` | 冷启动后监听键盘日志并扫描 `XiaoZhi KB` | 可选依赖 `bleak`；不主动复位 |
 | `verify_selector_stability.py` | 检测选择器 SPI2 断言与重启循环 | 查找 `spi_hal_setup_trans` 和重复 selector 启动 |
 | `verify_xiaozhi_stability.py` | 检测小智 Wi-Fi 启动栈故障 | 查找 `Stack protection fault`、重复启动和 `SdCardLogVprintf` |
-| `verify_agent_voice_runtime.py` | 验收 Agent 完整语音回路 | 安全监听至少 30 秒，要求联网、WSS、`/sdcard/shenyong/` 双 WAV 落卡和自动播放里程碑；SPI2/栈/哈希/重启故障硬失败 |
+| `verify_agent_voice_runtime.py` | 验收 Agent 完整语音回路 | 安全监听至少 30 秒，要求联网、WSS、`/sdcard/shenyong/` 上下行 AMR 落卡和自动播放里程碑；SPI2/栈/哈希/重启故障硬失败 |
 | `test_verify_agent_voice_runtime.py` | 串口判定规则单元测试 | 纯日志样本，不连接真机、不读取秘密 |
 | `verify_mic_runtime.py` | 验证 Mic 40 KiB 任务、双通道 codec、共享 ESP-SR NS、Wi-Fi UDP 与 1.00x 采集 | 安全 DTR/RTS，只监听不复位；panic/SPI2/任务看门狗硬失败 |
 | `test_verify_mic_runtime.py` | Mic 启动日志规则单元测试 | 纯日志样本，不连接真机 |
