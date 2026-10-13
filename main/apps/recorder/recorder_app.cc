@@ -21,6 +21,7 @@
 #include "recorder_reply_download.h"
 #include "recorder_amr_encoder.h"
 #include "recorder_recording_policy.h"
+#include "recorder_send_cue.h"
 #include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
@@ -537,6 +538,7 @@ void RunRecorderApp() {
     RecorderPlaybackStream playback;
     std::unique_ptr<RecorderRateConverter> playback_rate;
     bool speaker_enabled = false;
+    RecorderSendCue send_cue(codec.output_sample_rate());
     FILE* upload_file = nullptr;
     uint64_t upload_sent = 0;
     uint32_t upload_chunk_bytes = 0;
@@ -860,6 +862,9 @@ void RunRecorderApp() {
                     RenderAssistant(&ui_context);
                     ESP_LOGI(TAG, "Agent accepted turn: %s",
                              turn_queue.active().paths.turn_id.c_str());
+                    if (send_cue.OnAccepted(frame.turn_id, frame.replay)) {
+                        ESP_LOGI(TAG, "Send success cue queued");
+                    }
                     break;
                 }
                 case AgentVoiceControlType::kReplyStart: {
@@ -998,9 +1003,31 @@ void RunRecorderApp() {
             codec.EnableOutput(false);
             speaker_enabled = false;
         }
+        const bool cue_owns_output = send_cue.pending() && f == nullptr &&
+            control.mode != RecorderControlMode::kRecording;
+        if (cue_owns_output) {
+            const bool starting = send_cue.at_start();
+            if (!speaker_enabled) {
+                codec.EnableOutput(true);
+                speaker_enabled = true;
+            }
+            std::vector<int16_t> samples;
+            if (send_cue.Read(false, &samples)) {
+                if (starting) ESP_LOGI(TAG, "Send success cue playback start");
+                codec.OutputData(samples);
+                if (!send_cue.pending() || send_cue.at_start()) {
+                    ESP_LOGI(TAG, "Send success cue playback complete");
+                    if (!send_cue.pending() &&
+                        (!playback.is_open() || control.mode != RecorderControlMode::kPlaying)) {
+                        codec.EnableOutput(false);
+                        speaker_enabled = false;
+                    }
+                }
+            }
+        }
         // Playback advances one small block per main-loop pass. A hold suspends
         // output but keeps the file cursor and resampler for exact continuation.
-        if (control.mode == RecorderControlMode::kIdle && f == nullptr) {
+        if (!cue_owns_output && control.mode == RecorderControlMode::kIdle && f == nullptr) {
             if (playback.is_open()) {
                 control.mode = RecorderControlMode::kPlaying;
                 RenderAssistant(&ui_context);
@@ -1028,7 +1055,8 @@ void RunRecorderApp() {
             }
             RenderAssistant(&ui_context);
         }
-        if (playback.is_open() && control.mode == RecorderControlMode::kPlaying && f == nullptr) {
+        if (!cue_owns_output && playback.is_open() &&
+            control.mode == RecorderControlMode::kPlaying && f == nullptr) {
             if (!speaker_enabled) {
                 codec.EnableOutput(true);
                 speaker_enabled = true;
@@ -1256,7 +1284,7 @@ void RunRecorderApp() {
         if (!upload_one_chunk()) fail_connection("WAV upload failed");
 
         if (control.mode == RecorderControlMode::kIdle) {
-            vTaskDelay(pdMS_TO_TICKS((upload_file != nullptr || reply_download.active()) ? 1 : 10));  // 空闲时让出 CPU
+            vTaskDelay(pdMS_TO_TICKS((upload_file != nullptr || reply_download.active() || send_cue.pending()) ? 1 : 10));  // 空闲时让出 CPU
         }
     }
 }

@@ -68,3 +68,6 @@
 CMake runs the tracked WebSocket lifetime patch before building the managed dependency.
 Failed upgrades still own a reader task; always disconnect/join it before freeing the
 WebSocket buffers or event group, otherwise a service restart can trigger double-free.
+
+CMake includes recorder_send_cue.cc and its committed, generated PCM asset for the local
+send-success sound. It shares recorder-task codec ownership and never needs network or SD.

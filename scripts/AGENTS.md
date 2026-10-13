@@ -84,3 +84,7 @@ esp-ml307 dependency. It makes WebSocket destruction always stop/join the TCP re
 even after an HTTP upgrade failure, before destroying callback-owned members. The
 patch is idempotent and rejects changed upstream code; its test covers both guards.
 Never replace it with a delay or disable heap checks.
+
+`generate_recorder_send_cue.py` uses only Python stdlib to deterministically generate an
+original 24 kHz PCM16 swoosh into recorder_send_cue_pcm.inc. Re-run after waveform edits;
+keep the 80 ms silent DMA tail and verify both the host cue test and firmware build.

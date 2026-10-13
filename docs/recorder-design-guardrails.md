@@ -247,6 +247,11 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/recorder/recorder_display_guard_test.cc \
   -o /tmp/recorder_display_guard_test && /tmp/recorder_display_guard_test
 
+c++ -std=c++17 -Wall -Wextra -Werror \
+  main/apps/recorder/recorder_send_cue_test.cc \
+  main/apps/recorder/recorder_send_cue.cc \
+  -o /tmp/recorder_send_cue_test && /tmp/recorder_send_cue_test
+
 source ~/esp/esp-idf/export.sh
 idf.py build
 nm build/esp-idf/main/libmain.a | rg ' U ns_(create|pro_create)$'
@@ -343,3 +348,13 @@ Below one second, close and remove only the new unindexed recording, before flus
 manifest publication/queue insertion. Both release and application exit use the same gate.
 A cleanup failure still must not create a manifest, so restart cannot upload the rejected clip.
 Do not scan or mutate the existing queue; an interrupted assistant reply resumes next loop.
+
+## Send-success audio cue (2.2.12)
+
+Only a fresh server turn_accepted acknowledgement queues the local swoosh. Cached replay
+and repeated acknowledgement of the same turn do not. Short/discarded gestures never
+reach this path. Use bounded 20 ms PCM blocks on the same recorder task; no SD/network
+access or panel wake is needed. The audible sweep is 160 ms with 80 ms silent DMA tail.
+Recording takes output priority: postpone/pause the cue while the microphone is active.
+During an assistant reply, retain the reply cursor and resume after the cue; do not mix
+or advance two audio streams together. Apply the normal speaker volume, including mute.

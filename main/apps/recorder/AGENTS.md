@@ -48,3 +48,13 @@ AMR-NB 编码器的 `code_10i40_35bits` 在原 8 KiB main 栈上触发保护异�
 `DiscardShortRecording` 必须在显示 pause 内、`FinishRecording`/哈希/MarkRecorded 之前调用，
 并覆盖普通松手与返回菜单。短录音不改变在途队列，原回复在下一轮自动恢复播放。
 边界测试覆盖不足/恰好/超过 1 秒、非法采样率及所有亮暗屏/录音/播放状态下的音量键。
+
+## 2.2.12 发送成功提示音
+
+`recorder_send_cue.*` 与生成的 `recorder_send_cue_pcm.inc` 提供 160 ms 下滑扫频/气流声，
+附 80 ms 静音用于 DMA 收尾。成功确认后排队，20 ms 一块；重复确认/缓存 replay 不入队。
+主循环在麦克风关闭且录音文件已收尾后播放，优先于回复但保留回复游标，输出使用原音量。
+单测验证没有确认不响、重复/重放抑制、录音暂停不丢样本、多条成功排队、幅度/尾静音和重采样。
+
+2.2.12 实机暗屏验收：串口在 accepted 后 20 ms 记录 cue playback start，只有一次播放；
+用户确认提示音正常，BOOT/KEY 音量操作继续有效。
