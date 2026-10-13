@@ -23,6 +23,10 @@ private:
     FILE* file_ = nullptr;
     RecorderWavInfo info_{};
     uint32_t remaining_ = 0;
+    bool amr_ = false;
+    void* amr_decoder_ = nullptr;
 };
+
+bool RecorderPlaybackAmrSelfTest();
 
 #endif

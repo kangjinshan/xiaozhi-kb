@@ -80,6 +80,7 @@ bool RecorderNetwork::ConnectSocket() {
     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     websocket_->SetHeader("Protocol-Version", "1");
     websocket_->SetHeader("Reply-Transport", "http-download");
+    websocket_->SetHeader("Reply-Format", "amr-nb");
     websocket_->SetReceiveBufferSize(8192);
     websocket_->OnConnected([this]() {
         Publish(RecorderNetworkEventType::kSocketConnected);

@@ -1,5 +1,6 @@
 #include "recorder_turn_queue.h"
 #include "recorder_playback_stream.h"
+#include "recorder_amr_frame.h"
 
 #include <cassert>
 #include <cstring>
@@ -25,6 +26,8 @@ static void WriteWav(const std::string& path, const std::vector<int16_t>& pcm) {
 }
 
 int main() {
+    assert(RecorderAmrFrameSize(0x3c)==32 && RecorderAmrFrameSize(0x7c)==1);
+    assert(RecorderAmrFrameSize(0x3d)==0 && RecorderAmrFrameSize(9<<3)==0);
     char pattern[] = "/tmp/shenyong-concurrency-XXXXXX";
     const char* root = mkdtemp(pattern);
     assert(root);

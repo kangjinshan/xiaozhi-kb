@@ -110,5 +110,14 @@ int main() {
         interrupted, AgentTurnStatus::kSending));
     assert(access(interrupted.manifest.c_str(), F_OK) == 0);
     assert(access(manifest_backup.c_str(), F_OK) != 0);
+    const std::string amr_path = AgentTurnReplyPath(paths, "amr-nb");
+    const std::vector<uint8_t> amr = {'#','!','A','M','R','\n',0x7c};
+    WriteFile(amr_path, old_reply);
+    assert(store.BeginReply(paths, amr.size(), reply_hash, "amr-nb"));
+    assert(store.AppendReply(amr.data(), amr.size()));
+    assert(store.CommitReply("text", "reply", amr.size(), reply_hash, "2026-10-13T12:00:00Z"));
+    assert(ReadBytes(amr_path) == amr);
+    assert(ReadText(paths.manifest).find("\"assistant_path\":\"assistant.amr\"") != std::string::npos);
+    assert(AgentTurnReplyPath(paths, "../../escape").empty());
     return 0;
 }

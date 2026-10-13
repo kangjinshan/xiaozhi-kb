@@ -453,6 +453,7 @@ void RunRecorderApp() {
     const int channels = codec.input_channels();
     const int sample_rate = codec.input_sample_rate();
     ESP_LOGI(TAG, "codec ready: %d Hz, %d ch", sample_rate, channels);
+    ESP_LOGI(TAG, "AMR-NB decoder self-test: %s", RecorderPlaybackAmrSelfTest() ? "ok" : "failed");
     RecorderNoiseReducer noise_reducer(sample_rate);
     ESP_LOGI(TAG, "recorder DSP: input=%d output=%d ns=%s",
              sample_rate,
@@ -678,7 +679,7 @@ void RunRecorderApp() {
             return;
         }
         const std::string completed_id = turn_queue.active().paths.turn_id;
-        const std::string completed_path = turn_queue.active().paths.assistant_wav;
+        const std::string completed_path = AgentTurnReplyPath(turn_queue.active().paths, reply_control.audio_format);
         automatic_play_paths.push_back(completed_path);
         turn_queue.FinishActive();
         AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStored);
@@ -856,7 +857,7 @@ void RunRecorderApp() {
                     abort_reply();
                     RecorderDisplayPause();
                     const bool began = turn_store.BeginReply(
-                        turn_queue.active().paths, frame.bytes, frame.sha256);
+                        turn_queue.active().paths, frame.bytes, frame.sha256, frame.audio_format);
                     RecorderDisplayResume();
                     if (!began) {
                         fail_connection("reply file could not be created");

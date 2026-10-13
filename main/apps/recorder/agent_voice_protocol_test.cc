@@ -99,6 +99,15 @@ int main() {
     reply8.replace(reply8.find("16000"), 5, "8000");
     assert(AgentVoiceParseControl(reply8, "turn-1", &control));
 
+    auto amr_reply = reply8;
+    amr_reply.replace(amr_reply.find("wav-pcm-s16le"), std::string("wav-pcm-s16le").size(), "amr-nb");
+    amr_reply.replace(amr_reply.find("/api/device/voice/replies/turn-1"), std::string("/api/device/voice/replies/turn-1").size(),
+        "/api/device/voice/replies/turn-1?format=amr-nb");
+    assert(AgentVoiceParseControl(amr_reply, "turn-1", &control));
+    assert(control.audio_format == "amr-nb");
+    assert(AgentVoiceBuildReplyDownloadUrl("wss://agent.invalid/ws",control.download_path,"turn-1") ==
+           "https://agent.invalid/api/device/voice/replies/turn-1?format=amr-nb");
+
     const std::string reply_without_server_time =
         std::string("{\"type\":\"reply_start\",\"turn_id\":\"turn-1\",") +
         "\"bytes\":2048,\"sha256\":\"" + std::string(64, 'b') +

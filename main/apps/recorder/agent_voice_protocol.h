@@ -34,6 +34,7 @@ struct AgentVoiceControl {
     std::string reply_text;
     std::string server_time;
     std::string download_path;
+    std::string audio_format = "wav-pcm-s16le";
     std::string error_code;
     bool retryable = false;
 };

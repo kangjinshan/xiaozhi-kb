@@ -9,8 +9,8 @@
 - `recorder_assistant_ui.*`：纯展示映射；录音状态优先于前一条请求的错误提示，始终显示松开发送。
 - `recorder_app.cc`：唯一 SD/codec 主循环；每轮最多一个网络事件、一个 4096 字节上传块、一个 1024 样本播放块。上传缓冲区在堆上复用，TLS/JSON 工作需保留 main 栈余量。
 - `recorder_turn_queue.h`：在途队首固定，保存新的录音只追加，完成/终态失败后才出队。启动后不得再调用会清理 `.part` 的 `ListPending()`。
-- `recorder_reply_download.*`：使用严格同源 HTTPS 和原设备 Token，一次 GET 获取完整音频，有界读取到 SD，不发送逐块 ACK。拒绝重定向/错误状态/长度不符，15 秒无进度重连重取已完成 turn，不能调用模型重新生成。
-- `recorder_playback_stream.*`：可暂停的 8/16/24 kHz PCM16 单声道 WAV 游标；与 resampler 一起跨录音保留，不读文件即暂停。录音时禁用输出，松手保存后自动续播，回复按完成顺序播放。
+- `recorder_reply_download.*`：使用严格同源 HTTPS 和原设备 Token，后台 12 KiB 任务完成一次 GET，8 KiB 有界接收缓冲由主任务读取到 SD，不发送逐块 ACK。拒绝重定向/错误状态/长度不符，15 秒无进度重连重取已完成 turn，不能调用模型重新生成。
+- `recorder_playback_stream.*`：可暂停的 8/16/24 kHz PCM16 单声道 WAV 与 AMR-NB 游标；AMR 每帧解码为 160 个 8 kHz 样本；与 resampler 一起跨录音保留，不读文件即暂停。录音时禁用输出，松手保存后自动续播，回复按完成顺序播放。
 - `agent_voice_state.*`：只描述传输；播放开始/结束不能改写正在发送的下一条。
 - `/sdcard/shenyong/` 是当前专用根目录；旧金山 `/sdcard/agent` 与 `/sdcard/rec` 不导入、不自动重放、不删除。
 - `font_puhui_assistant_24_4.c` 与 `font_puhui_shenyong_36_4.c` 分别服务文案和主标题/按钮；更改中文文案后重新生成，不加载动态历史字体。
@@ -18,3 +18,8 @@
 必须运行 guardrails 中全部主机测试、`recorder_concurrency_test`、运行日志判定测试和
 ESP-IDF 5.5.3 的 `idf.py build`。真机验证连续两条录音、自动播报、播报中插话和串口无
 SPI2/栈/哈希错误。网络与硬件的真实验收不得用纯 reducer 测试代替。
+
+2.2.8 默认通过 Reply-Format 请求 AMR-NB。文件原子发布为 assistant.amr，manifest 中
+assistant_path 必须如实记录格式；旧 WAV 不删除并继续兼容。AMR 文件头固定 #!AMR\n，
+拒绝保留帧类型/坏填充/截断帧，解码使用已有 Espressif AMR-NB 库，输出再重采样到 24 kHz。
+启动时用一个合成静音帧验证目标解码器，不播放测试音；USB 必须看到 self-test: ok。

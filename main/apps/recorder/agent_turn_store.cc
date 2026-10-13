@@ -195,11 +195,19 @@ struct AgentTurnStore::Record {
     std::string user_sha256;
     uint64_t assistant_bytes = 0;
     std::string assistant_sha256;
+    std::string assistant_path = "assistant.wav";
     std::string transcript;
     std::string reply_text;
     std::string server_time;
     std::string last_error;
 };
+
+std::string AgentTurnReplyPath(const AgentTurnPaths& paths, const std::string& audio_format) {
+    if (!paths.valid()) return {};
+    if (audio_format == "amr-nb") return paths.directory + "/assistant.amr";
+    if (audio_format == "wav-pcm-s16le") return paths.assistant_wav;
+    return {};
+}
 
 const char* AgentTurnStatusName(AgentTurnStatus status) {
     switch (status) {
@@ -323,6 +331,7 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
                 continue;
             }
             unlink((paths.assistant_wav + ".part").c_str());
+            unlink((paths.directory + "/assistant.amr.part").c_str());
             pending.push_back({
                 paths,
                 record.status,
@@ -349,17 +358,21 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
 
 bool AgentTurnStore::BeginReply(const AgentTurnPaths& paths,
                                 uint64_t expected_bytes,
-                                const std::string& expected_sha256) {
+                                const std::string& expected_sha256,
+                                const std::string& audio_format) {
     AbortReply();
+    const std::string reply_path = AgentTurnReplyPath(paths, audio_format);
+    if (reply_path.empty()) return false;
     if (!paths.valid() || expected_bytes == 0 || expected_sha256.size() != 64) {
         return false;
     }
-    const std::string part_path = paths.assistant_wav + ".part";
+    const std::string part_path = reply_path + ".part";
     reply_file_ = fopen(part_path.c_str(), "wb");
     if (reply_file_ == nullptr) {
         return false;
     }
     active_paths_ = paths;
+    active_reply_path_ = reply_path;
     expected_reply_bytes_ = expected_bytes;
     received_reply_bytes_ = 0;
     expected_reply_sha256_ = expected_sha256;
@@ -391,7 +404,8 @@ bool AgentTurnStore::CommitReply(const std::string& transcript,
         return false;
     }
     const AgentTurnPaths paths = active_paths_;
-    const std::string part_path = paths.assistant_wav + ".part";
+    const std::string reply_path = active_reply_path_;
+    const std::string part_path = reply_path + ".part";
     const bool flushed = fflush(reply_file_) == 0 && fsync(fileno(reply_file_)) == 0;
     const bool closed = fclose(reply_file_) == 0;
     reply_file_ = nullptr;
@@ -399,7 +413,7 @@ bool AgentTurnStore::CommitReply(const std::string& transcript,
         received_reply_bytes_ == expected_reply_bytes_ &&
         actual_bytes == expected_reply_bytes_ &&
         actual_sha256 == expected_reply_sha256_;
-    if (!valid || !PublishFile(part_path, paths.assistant_wav)) {
+    if (!valid || !PublishFile(part_path, reply_path)) {
         unlink(part_path.c_str());
         active_paths_ = {};
         return false;
@@ -410,6 +424,7 @@ bool AgentTurnStore::CommitReply(const std::string& transcript,
         return false;
     }
     record.status = AgentTurnStatus::kComplete;
+    record.assistant_path = reply_path.substr(reply_path.find_last_of('/') + 1);
     record.assistant_bytes = actual_bytes;
     record.assistant_sha256 = actual_sha256;
     record.transcript = transcript;
@@ -418,6 +433,7 @@ bool AgentTurnStore::CommitReply(const std::string& transcript,
     record.last_error.clear();
     const bool saved = WriteRecord(paths, record) && AppendIndex(record);
     active_paths_ = {};
+    active_reply_path_.clear();
     expected_reply_bytes_ = 0;
     received_reply_bytes_ = 0;
     expected_reply_sha256_.clear();
@@ -430,9 +446,10 @@ void AgentTurnStore::AbortReply() {
         reply_file_ = nullptr;
     }
     if (active_paths_.valid()) {
-        unlink((active_paths_.assistant_wav + ".part").c_str());
+        unlink((active_reply_path_ + ".part").c_str());
     }
     active_paths_ = {};
+    active_reply_path_.clear();
     expected_reply_bytes_ = 0;
     received_reply_bytes_ = 0;
     expected_reply_sha256_.clear();
@@ -459,6 +476,8 @@ bool AgentTurnStore::LoadRecord(const AgentTurnPaths& paths, Record* record) con
     }
     ExtractUint64(json, "assistant_bytes", &record->assistant_bytes);
     ExtractString(json, "assistant_sha256", &record->assistant_sha256);
+    ExtractString(json, "assistant_path", &record->assistant_path);
+    if (record->assistant_path != "assistant.wav" && record->assistant_path != "assistant.amr") return false;
     ExtractString(json, "transcript", &record->transcript);
     ExtractString(json, "reply_text", &record->reply_text);
     ExtractString(json, "server_time", &record->server_time);
@@ -477,7 +496,7 @@ bool AgentTurnStore::WriteRecord(const AgentTurnPaths& paths,
          << ",\"user_path\":\"user.wav\""
          << ",\"user_bytes\":" << record.user_bytes
          << ",\"user_sha256\":\"" << JsonEscape(record.user_sha256) << "\""
-         << ",\"assistant_path\":\"assistant.wav\""
+         << ",\"assistant_path\":\"" << JsonEscape(record.assistant_path) << "\""
          << ",\"assistant_bytes\":" << record.assistant_bytes
          << ",\"assistant_sha256\":\"" << JsonEscape(record.assistant_sha256) << "\""
          << ",\"transcript\":\"" << JsonEscape(record.transcript) << "\""

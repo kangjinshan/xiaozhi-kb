@@ -232,6 +232,11 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   main/apps/recorder/recorder_hold_input_test.cc \
   -o /tmp/recorder_hold_input_test && /tmp/recorder_hold_input_test
 
+c++ -std=c++17 -Wall -Wextra -Werror -DRECORDER_REPLY_DOWNLOAD_HOST_TEST \
+  main/apps/recorder/recorder_reply_download_test.cc \
+  main/apps/recorder/recorder_reply_download.cc \
+  -o /tmp/recorder_reply_download_test && /tmp/recorder_reply_download_test
+
 source ~/esp/esp-idf/export.sh
 idf.py build
 nm build/esp-idf/main/libmain.a | rg ' U ns_(create|pro_create)$'
@@ -280,9 +285,22 @@ Offline end-to-end storage must accept the exact `unsynced` date produced by
 The user explicitly replaced stop-and-wait reply downloads with a single HTTPS GET.
 `RecorderReplyDownload` uses `esp_http_client`, the platform certificate bundle and the
 same device credential. It rejects redirects, non-200 status, incorrect Content-Length
-and non-matching turn paths. Reads are bounded, inactive reads yield after 40 ms, and
+and non-matching turn paths. Reads are bounded, HTTPS handshake/receive runs on a separate 12 KiB task with an 8 KiB stream buffer; main-task reads never block, and
 15 seconds without progress triggers an idempotent retry of the already-created file.
 The complete byte count and SHA-256 must pass before atomic publication and playback.
 The old WSS path remains only for server compatibility and is covered by existing tests.
 8 kHz PCM16 mono playback is admitted and resampled to 24 kHz without changing capture
 or the default server TTS format.
+
+## AMR-NB playback and storage (2.2.8)
+
+Negotiate Reply-Format amr-nb only with the full-file HTTPS transport. Reply metadata
+must match AMR bytes/hash, sample rate 8000, and the exact format query. Publish as
+assistant.amr and record that filename; never disguise AMR as WAV. Existing WAV files
+and format checks remain supported. FATFS replacement tests cover both extensions.
+
+Parse the six-byte AMR file magic and each frame boundary before decode; reject
+reserved frame types, invalid padding and truncation. Use the target SDK's AMR-NB
+frame decoder, retain it across recording interruptions, and resample its 160-sample
+8 kHz output to the existing 24 kHz codec. A synthetic silence-frame boot self-test
+checks the actual target decoder without emitting audio.

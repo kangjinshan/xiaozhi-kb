@@ -192,7 +192,8 @@ std::string AgentVoiceBuildReplyDownloadUrl(const std::string& websocket_url,
                                            const std::string& turn_id) {
     if (websocket_url.rfind("wss://", 0) != 0 || !AgentVoiceSafeTurnId(turn_id) ||
         turn_id == "." || turn_id == ".." ||
-        download_path != "/api/device/voice/replies/" + turn_id) return {};
+        (download_path != "/api/device/voice/replies/" + turn_id &&
+         download_path != "/api/device/voice/replies/" + turn_id + "?format=amr-nb")) return {};
     const size_t end = websocket_url.find('/', 6);
     const std::string authority = websocket_url.substr(6, end - 6);
     if (authority.empty() || authority.find_first_of("@?#\\ \r\n") != std::string::npos) return {};
@@ -260,11 +261,11 @@ bool AgentVoiceParseControl(const std::string& json,
         std::string audio_format;
         if (!ParseTurnId(json, expected_turn_id, &parsed.turn_id) ||
             !ExtractUint64(json, "bytes", &parsed.bytes) ||
-            parsed.bytes < 44 || parsed.bytes > kAgentVoiceMaxBytes ||
+            parsed.bytes < 7 || parsed.bytes > kAgentVoiceMaxBytes ||
             !ExtractString(json, "sha256", &parsed.sha256) ||
             !AgentVoiceSha256Text(parsed.sha256) ||
             !ExtractString(json, "audio_format", &audio_format) ||
-            audio_format != "wav-pcm-s16le" ||
+            (audio_format != "wav-pcm-s16le" && audio_format != "amr-nb") ||
             !ExtractUint64(json, "sample_rate", &sample_rate) ||
             (sample_rate != 8000 && sample_rate != 16000) ||
             !ExtractUint64(json, "channels", &channels) || channels != 1 ||
@@ -274,9 +275,13 @@ bool AgentVoiceParseControl(const std::string& json,
             parsed.server_time.empty()) {
             return false;
         }
+        if ((audio_format == "wav-pcm-s16le" && parsed.bytes < 44) ||
+            (audio_format == "amr-nb" && sample_rate != 8000)) return false;
+        parsed.audio_format = audio_format;
+        const std::string suffix = audio_format == "amr-nb" ? "?format=amr-nb" : "";
         if (HasValue(json, "download_path") &&
             (!ExtractString(json, "download_path", &parsed.download_path) ||
-             parsed.download_path != "/api/device/voice/replies/" + parsed.turn_id ||
+             parsed.download_path != "/api/device/voice/replies/" + parsed.turn_id + suffix ||
              parsed.turn_id == "." || parsed.turn_id == "..")) return false;
         parsed.type = AgentVoiceControlType::kReplyStart;
     } else if (type == "reply_end") {

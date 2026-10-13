@@ -1,27 +1,38 @@
 #ifndef RECORDER_REPLY_DOWNLOAD_H_
 #define RECORDER_REPLY_DOWNLOAD_H_
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <esp_http_client.h>
+#ifdef RECORDER_REPLY_DOWNLOAD_HOST_TEST
+#include "recorder_reply_download_test_port.h"
+#else
+#include <freertos/FreeRTOS.h>
+#include <freertos/stream_buffer.h>
+#endif
 
-// A single HTTPS GET. Reads use a bounded buffer while TCP handles backpressure;
-// there is no application-level request or acknowledgement for individual blocks.
+// One background HTTPS GET with a bounded local receive buffer. Only the
+// recorder main task reads this buffer and touches SD; no remote block ACKs.
 class RecorderReplyDownload {
 public:
     ~RecorderReplyDownload() { Close(); }
     bool Start(const std::string& url, uint64_t expected_bytes);
     int Read(uint8_t* destination, size_t capacity);
-    bool active() const { return client_ != nullptr; }
+    bool active() const { return buffer_ != nullptr; }
     bool complete() const;
     void Close();
 
 private:
-    esp_http_client_handle_t client_ = nullptr;
+    static void RunTask(void* context);
+    void Run();
+    StreamBufferHandle_t buffer_ = nullptr;
     std::string url_;
     uint64_t expected_bytes_ = 0;
-    uint64_t received_bytes_ = 0;
+    uint64_t delivered_bytes_ = 0;
+    std::atomic<bool> stop_{false};
+    std::atomic<bool> running_{false};
+    std::atomic<bool> failed_{false};
 };
 
 #endif
