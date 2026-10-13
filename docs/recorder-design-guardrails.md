@@ -262,7 +262,7 @@ Real-device acceptance checks:
   `recorder DSP: input=24000 output=16000 ns=enabled`.
 - Logs do not contain `spi_hal_setup_trans`, `Guru Meditation`, or `Rebooting`.
 - SD card mounts and self-test passes.
-- Holding `按住说话` enters `正在聆听`; releasing saves a 16 kHz mono PCM16 WAV whose environment-only regions are audibly quieter without clipped or missing speech. Physical keys do nothing while recording.
+- Holding `按住说话` enters `正在聆听`; releasing saves a 16 kHz mono PCM16 WAV whose environment-only regions are audibly quieter without clipped or missing speech. BOOT/KEY adjust volume without ending recording.
 - During a connected turn, the screen progresses through `正在发送`, `正在思考`, `准备回复`, and `正在播报`; the primary button remains available while busy. Record a second turn before the first reply and verify both retain the correct IDs and receive replies in order.
 - The page has only status and a single large push-to-talk target; no history, decorative orb or separate pause/resume controls.
 
@@ -277,9 +277,9 @@ Real-device acceptance checks:
 
 ## 2026-10-13 dark-screen operation
 
-KEY/GPIO10 uses press-down/up for voice recording in both display states. BOOT
-single/double-click lowers/raises playback volume. `RecorderHoldInput` combines
-touch and KEY so one release cannot stop another still-held input.
+As of 2.2.11, KEY/GPIO10 increases volume by ten and BOOT/GPIO9 decreases it by ten
+on each press-down, clamped to 0–100. Both work in every mode and display state;
+neither key records or changes the panel/network state. Touch remains the recording input.
 
 While dark, LVGL remains stopped. `RecorderDisplayPollDarkTouch()` is called from
 the same main loop and reads CST9217 through I2C at most every 20 ms. A fresh
@@ -335,3 +335,11 @@ reboot loop and visible flashing. `StartRecorderApp()` runs the entire recorder 
 24 KiB task and lets app_main return. Keep ownership of SD, codec, display and dark-touch
 polling on that task; moving encoding into a concurrent SD/UI owner is not a fix.
 Keep the target encoder self-test and log task minimum-free bytes after it and recordings.
+
+## Sub-second gesture rejection (2.2.11)
+
+Count captured input PCM frames, not wall-clock hold time or padded AMR frames.
+Below one second, close and remove only the new unindexed recording, before flush/hash/
+manifest publication/queue insertion. Both release and application exit use the same gate.
+A cleanup failure still must not create a manifest, so restart cannot upload the rejected clip.
+Do not scan or mutate the existing queue; an interrupted assistant reply resumes next loop.

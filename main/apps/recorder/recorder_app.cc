@@ -20,6 +20,7 @@
 #include "recorder_hold_input.h"
 #include "recorder_reply_download.h"
 #include "recorder_amr_encoder.h"
+#include "recorder_recording_policy.h"
 #include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
@@ -170,6 +171,23 @@ bool FinishRecording(FILE* file, RecorderNoiseReducer* reducer,
         !encoder->Flush(&encoded) || !AppendEncoded(file, encoded)) return false;
     *pcm_bytes += tail.size() * sizeof(int16_t);
     return *pcm_bytes > 0 && std::fflush(file) == 0 && fsync(fileno(file)) == 0;
+}
+
+// Called with display paused, before MarkRecorded creates any manifest/index.
+// Even if cleanup fails, an unindexed short recording cannot enter the queue.
+bool DiscardShortRecording(FILE** file, const AgentTurnPaths& paths,
+                           uint64_t captured_frames, int sample_rate) {
+    if (*file == nullptr || RecorderRecordingLongEnough(captured_frames, sample_rate)) {
+        return false;
+    }
+    fclose(*file);
+    *file = nullptr;
+    if (unlink(paths.user_audio.c_str()) != 0 || rmdir(paths.directory.c_str()) != 0) {
+        ESP_LOGW(TAG, "Short recording cleanup incomplete; no upload manifest created");
+    }
+    ESP_LOGI(TAG, "Short recording discarded: %u ms; minimum=1000 ms; not queued",
+             static_cast<unsigned>(sample_rate > 0 ? captured_frames * 1000 / sample_rate : 0));
+    return true;
 }
 
 uint64_t RecorderMonotonicMs() {
@@ -361,6 +379,7 @@ RecorderControlAction ApplyRequest(const RecorderRequest& request,
         }
     } else if (action == RecorderControlAction::kVolumeChanged && codec != nullptr) {
         codec->SetOutputVolume(control->volume);
+        ESP_LOGI(TAG, "Speaker volume: %d%%", control->volume);
     } else if (action == RecorderControlAction::kExit && exit_requested != nullptr) {
         *exit_requested = true;
     }
@@ -483,22 +502,20 @@ void RunRecorderApp() {
     network.Start();
 
     // 5. 实体键只发布事件；状态 reducer 决定当前是否接受。
-    static Button left(KEY_LEFT_GPIO);
-    left.OnPressDown([]() { PublishHold(RecorderHoldSource::kKey, true); });
-    left.OnPressUp([]() { PublishHold(RecorderHoldSource::kKey, false); });
-
-    static Button right(BOOT_BUTTON_GPIO);
-    right.OnClick([]() {
-        PublishRequest(RecorderControlEvent::kPhysicalRight);
-    });
-    right.OnDoubleClick([]() {
+    static Button volume_up(KEY_LEFT_GPIO);
+    volume_up.OnPressDown([]() {
         PublishRequest(RecorderControlEvent::kPhysicalLeft);
+    });
+    static Button volume_down(BOOT_BUTTON_GPIO);
+    volume_down.OnPressDown([]() {
+        PublishRequest(RecorderControlEvent::kPhysicalRight);
     });
 
     // 6. 所有文件、DSP 与 codec 操作都留在本任务。
     std::vector<int16_t> buf(kFrameSamples * channels);
     FILE* f = nullptr;
     uint32_t data_bytes = 0;
+    uint64_t captured_frames = 0;
     bool recording_failed = false;
     bool exit_requested = false;
     int64_t last_disp_ms = 0;
@@ -949,7 +966,8 @@ void RunRecorderApp() {
             RecorderDisplayPause();
             playback.Close();
             abort_reply();
-            if (f != nullptr) {
+            if (f != nullptr && !DiscardShortRecording(
+                    &f, recording_paths, captured_frames, sample_rate)) {
                 const bool saved_ok = FinishRecording(f, &noise_reducer, &amr_encoder, &data_bytes) &&
                                       !recording_failed;
                 if (!saved_ok) {
@@ -1089,6 +1107,7 @@ void RunRecorderApp() {
             }
             const bool header_ok = fwrite("#!AMR\n", 1, 6, f) == 6;
             data_bytes = 0;
+            captured_frames = 0;
             recording_failed = !header_ok;
             last_disp_ms = 0;
             codec.EnableInput(true);
@@ -1099,6 +1118,7 @@ void RunRecorderApp() {
         if (control.mode == RecorderControlMode::kRecording && f != nullptr) {
             // 读一帧 PCM 并写入
             if (codec.InputData(buf)) {
+                captured_frames += buf.size() / channels;
                 std::vector<int16_t> processed;
                 bool block_ok = noise_reducer.Process(buf, &processed);
                 bool reached_voice_limit = false;
@@ -1144,9 +1164,15 @@ void RunRecorderApp() {
         }
 
         if (control.mode != RecorderControlMode::kRecording && f != nullptr) {
-            // 停止录音：回填头 + 关闭
+            // Stop before publishing: sub-second gestures never reach upload.
             codec.EnableInput(false);
             RecorderDisplayPause();
+            if (DiscardShortRecording(&f, recording_paths, captured_frames, sample_rate)) {
+                assistant_elapsed_seconds = 0;
+                RenderAssistant(&ui_context);
+                RecorderDisplayResume();
+                continue;
+            }
             const bool saved_ok = FinishRecording(f, &noise_reducer, &amr_encoder, &data_bytes) &&
                                   !recording_failed;
             fclose(f);

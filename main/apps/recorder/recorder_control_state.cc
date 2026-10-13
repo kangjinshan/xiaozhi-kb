@@ -26,6 +26,12 @@ RecorderControlAction RecorderControlReduce(RecorderControlState* state,
     if (event == RecorderControlEvent::kExitRequested) {
         return RecorderControlAction::kExit;
     }
+    if (event == RecorderControlEvent::kPhysicalLeft) {
+        return ChangeVolume(state, 10);  // KEY / GPIO10
+    }
+    if (event == RecorderControlEvent::kPhysicalRight) {
+        return ChangeVolume(state, -10);  // BOOT / GPIO9
+    }
     if (event == RecorderControlEvent::kPlaybackFinished) {
         if (state->mode == RecorderControlMode::kPlaying ||
             state->mode == RecorderControlMode::kPaused) {
@@ -69,24 +75,12 @@ RecorderControlAction RecorderControlReduce(RecorderControlState* state,
                 state->mode = RecorderControlMode::kPaused;
                 return RecorderControlAction::kPausePlayback;
             }
-            if (event == RecorderControlEvent::kPhysicalLeft) {
-                return ChangeVolume(state, 10);
-            }
-            if (event == RecorderControlEvent::kPhysicalRight) {
-                return ChangeVolume(state, -10);
-            }
             break;
 
         case RecorderControlMode::kPaused:
             if (event == RecorderControlEvent::kTouchPauseResume) {
                 state->mode = RecorderControlMode::kPlaying;
                 return RecorderControlAction::kResumePlayback;
-            }
-            if (event == RecorderControlEvent::kPhysicalLeft) {
-                return ChangeVolume(state, 10);
-            }
-            if (event == RecorderControlEvent::kPhysicalRight) {
-                return ChangeVolume(state, -10);
             }
             break;
     }

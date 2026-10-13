@@ -4,8 +4,9 @@
 `docs/recorder-design-guardrails.md`，保留 SPI2、SD 原子发布和设备认证。新版一次 HTTPS GET 下载整段 WAV；旧 WSS 客户端的逐块 ACK 仅作兼容。
 
 - `recorder_display.cc`：静态神勇界面，仅有状态与大按钮，不提供历史；主按钮按下开始、释放或移出结束。回调只发布事件。
-- `recorder_hold_input.h`：统一实体 KEY 与触摸的按住/释放；暗屏触摸有 300 ms 门槛和残留触点抑制。暗屏只在主任务轮询 I2C，LVGL 保持暂停，录音不唤醒屏幕。
-- `recorder_control_state.*`：录音、播放、音量与电源的纯状态机；后台发送/等待不能禁止录音。
+- `recorder_hold_input.h`：锁存触摸的按住/释放；暗屏触摸有 300 ms 门槛和残留触点抑制。暗屏只在主任务轮询 I2C，LVGL 保持暂停，录音不唤醒屏幕。
+- `recorder_control_state.*`：录音、播放、音量与电源的纯状态机；后台发送/等待不能禁止录音。BOOT 减音量、KEY 加音量，在所有状态有效，只改变音量。
+- `recorder_recording_policy.h`：以原始采集帧数判断至少 1 秒，不计 AMR 尾帧补齐；短录音在松手和退出时删除当次未索引音频，不能写 manifest、入队或触发网络。
 - `recorder_assistant_ui.*`：纯展示映射；录音状态优先于前一条请求的错误提示，始终显示松开发送。
 - `recorder_app.cc`：唯一 SD/codec 主循环；每轮最多一个网络事件、一个 4096 字节上传块、一个 1024 样本播放块。上传缓冲区在堆上复用，`StartRecorderApp()` 创建 24 KiB 栈的专用任务，AMR 搜索/TLS/JSON 工作必须保留栈余量。
 - `recorder_turn_queue.h`：在途队首固定，保存新的录音只追加，完成/终态失败后才出队。启动后不得再调用会清理 `.part` 的 `ListPending()`。
@@ -40,3 +41,10 @@ FlushDisplayThenPause 只能新增自己的 pause，不能预先 Resume；否则
 AMR-NB 编码器的 `code_10i40_35bits` 在原 8 KiB main 栈上触发保护异常，表现为持续重启闪屏。
 所有录音初始化和主循环移至同一个 24 KiB 专用任务；禁止只移除自检，因为实际录音仍需该栈。
 启动编码自检和每条录音保存后输出栈最低余量；真机必须确认两个 codec 自检成功、联网及连续运行。
+
+## 2.2.11 音量键和防误触
+
+实体按键使用 OnPressDown，每次物理按下只改变 10% 音量，无双击反向或 KEY 录音行为。
+`DiscardShortRecording` 必须在显示 pause 内、`FinishRecording`/哈希/MarkRecorded 之前调用，
+并覆盖普通松手与返回菜单。短录音不改变在途队列，原回复在下一轮自动恢复播放。
+边界测试覆盖不足/恰好/超过 1 秒、非法采样率及所有亮暗屏/录音/播放状态下的音量键。

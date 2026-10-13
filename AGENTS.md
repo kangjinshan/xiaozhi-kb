@@ -101,7 +101,8 @@
 - Agent 回复禁止在网络回调中直接写 SD。新版通过一次 HTTPS GET 下载，主任务有界写卡并验证完整长度/SHA-256 后原子发布；旧 WSS 协议保留 `reply_chunk_saved` 兼容。`assistant.wav.part` 永远不可播放。
 - 设备必须区分服务端终态失败与暂时失败：`retryable=false` 的当前 turn 要在主任务中原子标记 `failed`、清除 queued 状态并恢复录音；`ListPending()` 永远排除 `failed`，但不得删除其 `user.wav`。只有 `retryable=true` 才允许断线重放。
 - turn 日期和 ID 只能由纯 `RecorderTurnClock` 生成：认证 ready 帧的 Unix 毫秒与用户 UTC 偏移配合单调时钟得到本地 `YYYYMMDD`；未同步时使用八字符 `unsynced`。禁止恢复 `%llu` 格式化或把无效墙钟写成 `19700101`，ESP-IDF nano printf 不保证 64 位格式支持。
-- 神勇的 KEY/GPIO10 在亮暗屏均为按住录音、松开发送；BOOT 单击降音量、双击升音量。触摸和实体键通过 `RecorderHoldInput` 汇总，只有最后一个按住来源释放才停止录音。
+- 神勇的 KEY/GPIO10 每次按下音量 +10%，BOOT/GPIO9 每次按下音量 -10%，范围 0–100；亮暗屏和所有录音/播放状态都生效，只改音量。触摸负责录音，实体键不得再发布录音事件。
+- `RecorderRecordingLongEnough` 以采集到的原始 PCM 帧数判断至少 1 秒，不能用 AMR 填充后时长。松手与退出都在创建发送 manifest 之前丢弃短录音，清理只限当次未索引的音频和空目录，不影响原队列或回复续播。
 - 息屏期间保持 LVGL 停止并持有显示 pause；仅 Recorder 主任务每 20 ms 轮询 CST9217，长按任意位置 300 ms 触发录音，短点与切换时残留触点不触发，不唤醒面板。禁止为息屏触摸恢复后台刷屏。
 - `AgentTurnStore` 的日期路径只接受八位数字或精确 `unsynced`；未联网校时也必须能录制、索引并在重启后恢复，不可仅在时钟单测中支持而在存储层拒绝。
 - Recorder 收发与播放必须按主循环分块推进：每轮最多处理一个网络事件、发送 4096 字节或播放 1024 个源样本。上传缓冲区必须在堆上复用，不得恢复 4 KiB 局部数组或在 8 KiB main task 直接运行。神勇使用 24 KiB 专用任务；AMR `code_10i40_35bits` 已实测超过 8 KiB，启动和录音后需检查栈最低余量。

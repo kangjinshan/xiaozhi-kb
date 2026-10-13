@@ -1,4 +1,5 @@
 #include "recorder_control_state.h"
+#include "recorder_recording_policy.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -100,26 +101,43 @@ void TestIdlePlayOpensMenuAndSelectionStartsPlayback() {
           "playback completion restores idle");
 }
 
-void TestRecordingIgnoresPhysicalKeys() {
-    RecorderControlState state{RecorderControlMode::kRecording, 70};
-    Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalLeft) ==
-              RecorderControlAction::kNone,
-          "left key ignored while recording");
-    Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalRight) ==
-              RecorderControlAction::kNone,
-          "right key ignored while recording");
-    Check(state.volume == 70, "ignored keys keep volume");
+void TestVolumeKeysPreserveEveryModeAndScreenState() {
+    for (auto mode : {RecorderControlMode::kIdle, RecorderControlMode::kRecording,
+                      RecorderControlMode::kPlaying, RecorderControlMode::kPaused}) {
+        for (bool screen_on : {false, true}) {
+            RecorderControlState state{mode, 70};
+            state.screen_on = screen_on;
+            state.voice_phase = AgentVoicePhase::kThinking;
+            state.voice_turn_pending = true;
+            Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalRight) ==
+                      RecorderControlAction::kVolumeChanged,
+                  "BOOT lowers volume in every mode");
+            Check(state.volume == 60, "BOOT decreases volume by ten");
+            Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalLeft) ==
+                      RecorderControlAction::kVolumeChanged,
+                  "KEY raises volume in every mode");
+            Check(state.volume == 70 && state.mode == mode &&
+                      state.screen_on == screen_on && state.voice_turn_pending &&
+                      state.voice_phase == AgentVoicePhase::kThinking,
+                  "volume keys preserve microphone, panel and active voice turn");
+        }
+    }
 }
 
-void TestIdleIgnoresPhysicalKeys() {
-    RecorderControlState state{RecorderControlMode::kIdle, 70};
-    Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalLeft) ==
-              RecorderControlAction::kNone,
-          "left key ignored while idle");
-    Check(RecorderControlReduce(&state, RecorderControlEvent::kPhysicalRight) ==
-              RecorderControlAction::kNone,
-          "right key ignored while idle");
-    Check(state.volume == 70, "idle keys keep volume");
+void TestShortRecordingThresholdUsesUnpaddedCapture() {
+    for (int sample_rate : {8000, 16000, 24000}) {
+        Check(!RecorderRecordingLongEnough(0, sample_rate), "empty gesture is discarded");
+        Check(!RecorderRecordingLongEnough(sample_rate / 2, sample_rate),
+              "half-second gesture is discarded");
+        Check(!RecorderRecordingLongEnough(sample_rate - 1, sample_rate),
+              "last sample below one second is discarded despite AMR tail padding");
+        Check(RecorderRecordingLongEnough(sample_rate, sample_rate),
+              "exactly one second is sent");
+        Check(RecorderRecordingLongEnough(sample_rate + 1, sample_rate),
+              "longer recording is sent");
+    }
+    Check(!RecorderRecordingLongEnough(24000, 0), "unknown capture rate cannot send");
+    Check(!RecorderRecordingLongEnough(24000, -1), "invalid capture rate cannot send");
 }
 
 void TestPowerKeyTogglesScreenWithoutChangingAssistantMode() {
@@ -200,8 +218,8 @@ int main() {
     TestHoldInterruptsPlaybackAndReplyWaitsForRelease();
     TestRecordingContinuesDuringAgentTurns();
     TestIdlePlayOpensMenuAndSelectionStartsPlayback();
-    TestRecordingIgnoresPhysicalKeys();
-    TestIdleIgnoresPhysicalKeys();
+    TestVolumeKeysPreserveEveryModeAndScreenState();
+    TestShortRecordingThresholdUsesUnpaddedCapture();
     TestPowerKeyTogglesScreenWithoutChangingAssistantMode();
     TestPauseResumeAndVolumeBounds();
     TestMenuExitIsAvailableInEveryState();
