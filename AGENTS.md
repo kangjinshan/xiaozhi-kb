@@ -29,7 +29,7 @@
 - **启动模式分派**
   - 入口：`app_main()`（`main/main.cc`）
   - 核心逻辑：`AppModeRead()`（`main/apps/app_mode.cc`）
-  - 副作用：读取 NVS `appsel/mode`，进入 `RunKeyboardApp()`、`RunRecorderApp()`、`RunMicApp()`、`RunAppSelector()` 或 `Application::Run()`。
+  - 副作用：读取 NVS `appsel/mode`，进入 `RunKeyboardApp()`、`StartRecorderApp()`、`StartMicApp()`、`RunAppSelector()` 或 `Application::Run()`。
 - **从选择器进入应用**
   - 入口：`OnSelectorButtonClicked()`（`main/apps/app_selector.cc`）
   - 核心逻辑：`AppModeWriteAndReboot()` / `AppModeWriteKeyboardAndReboot()`
@@ -48,13 +48,13 @@
   - 控制规则：KEY/GPIO10 增益 +10%，BOOT/GPIO9 增益 -10%，AXP2101 PWR 只切换屏幕；触摸 START/STOP 录制 `/sdcard/mic/micNNNN.wav`，MENU 完成文件后回到选择器。
   - 实时规则：进入 Mic 后立即持续采集；电脑端 `scripts/mic_wifi_receiver.py` 发送订阅心跳、验证 BlackHole output→input 回环并在首包后切换 macOS 默认输入，断流或退出时恢复。`scripts/install_mic_macos_service.py` 可安装用户级常驻接收服务，使设备端进入/退出 Mic 无需手动运行命令。START/STOP 只控制可选 SD WAV，不能控制网络流。macOS 默认设备变化不会迁移应用已建立的 CoreAudio 会话；豆包等无输入选择器的应用必须在切换后完全退出重开，其“系统麦克风”标签表示跟随当前默认设备。
 - **神勇 助手交互、录音和回放**
-  - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
+  - 入口：`StartRecorderApp()` → 24 KiB 专用任务 → `RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
   - 核心逻辑：`RecorderBuildAssistantUi()`、`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
   - 展示规则：`神勇` 静态界面只保留一个主按钮，语义为 `按住说话` / `松开发送`；发送、思考、接收与播放期间均可开始新录音。回复在录音期间排队，松手后自动播放或从原位置续播。
   - 字体规则：24 px 文案子集和 36 px 品牌/按钮子集均来自 `puhui-common.ttf`；不再初始化动态历史字体。
   - 页面仅有连接指示、当前状态和大录音按钮；历史列表、独立暂停/继续按钮与装饰圆球已撤除。
   - 电源键规则：AXP2101 PWR 短按仅切换 AMOLED 息屏/亮屏；播放、Wi-Fi、WSS、Agent 和 SD 工作继续；正在进行的触摸录音跨亮暗屏交接，不丢失释放事件，触摸不唤醒，长按仍由硬件管理。
-  - 副作用：新 turn 写 `/sdcard/shenyong/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧金山 AI 的 `/sdcard/agent` 与 `/sdcard/rec` 文件保留，但不加入神勇队列或历史。
+  - 副作用：新 turn 写 `/sdcard/shenyong/YYYYMMDD/<turn>/user.amr`，回复验证后写 `assistant.amr` 和原子清单；旧金山 AI 的 `/sdcard/agent` 与 `/sdcard/rec` 文件保留，但不加入神勇队列或历史。
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
   - 核心逻辑：持久 WSS、ready 帧用户时区时间基准、4096 字节有界传输、turn 幂等状态、服务端 `retryable` 失败分类和 SD 原子文件
@@ -104,7 +104,7 @@
 - 神勇的 KEY/GPIO10 在亮暗屏均为按住录音、松开发送；BOOT 单击降音量、双击升音量。触摸和实体键通过 `RecorderHoldInput` 汇总，只有最后一个按住来源释放才停止录音。
 - 息屏期间保持 LVGL 停止并持有显示 pause；仅 Recorder 主任务每 20 ms 轮询 CST9217，长按任意位置 300 ms 触发录音，短点与切换时残留触点不触发，不唤醒面板。禁止为息屏触摸恢复后台刷屏。
 - `AgentTurnStore` 的日期路径只接受八位数字或精确 `unsynced`；未联网校时也必须能录制、索引并在重启后恢复，不可仅在时钟单测中支持而在存储层拒绝。
-- Recorder 收发与播放必须按主循环分块推进：每轮最多处理一个网络事件、发送 4096 字节或播放 1024 个源样本。上传缓冲区必须在堆上复用，不得把 4 KiB 数组放到只有 8 KiB 的 main task 栈上，TLS 握手会栈溢出。
+- Recorder 收发与播放必须按主循环分块推进：每轮最多处理一个网络事件、发送 4096 字节或播放 1024 个源样本。上传缓冲区必须在堆上复用，不得恢复 4 KiB 局部数组或在 8 KiB main task 直接运行。神勇使用 24 KiB 专用任务；AMR `code_10i40_35bits` 已实测超过 8 KiB，启动和录音后需检查栈最低余量。
 - `RecorderTurnQueue` 固定以队首标识在途 turn，新录音仅追加；`ListPending()` 只在启动恢复时调用，因为它会清理 `.part`，运行时扫描会破坏正在接收的回复。完成回复立即让下一条发送，播放完成事件不得清除新 turn。
 - 录音期间关闭扬声器并保留 `RecorderPlaybackStream` 的文件位置与 resampler；未在录音时关闭麦克风。网络回调继续只入队，不增加并发 FATFS/LVGL 访问。
 - 单个上传 WAV 上限为 4 MiB；录音链路必须预留 DSP flush 空间并自动停止，不能生成永久无法上传的队列项。设备 token 只允许存在于忽略的 `sdkconfig` 和构建产物。

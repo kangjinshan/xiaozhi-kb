@@ -326,3 +326,12 @@ Encode denoised 16 kHz PCM incrementally to AMR-NB at 8 kHz / 12.2 kbps. Store u
 its exact compressed checksum; keep logical PCM counts for duration/UI. Legacy WAV manifests
 remain valid and explicitly select their upload format. Run encoder framing/reset/failure,
 manifest recovery, protocol, and dark-pause guard tests plus the target codec self-tests.
+
+## AMR task stack (2.2.10)
+
+On the real C6, AMR-NB MR122 codebook search (`code_10i40_35bits`, called by `cbsearch`)
+overflows the 8 KiB ESP-IDF main task even for the startup silence frame. This causes a
+reboot loop and visible flashing. `StartRecorderApp()` runs the entire recorder on one
+24 KiB task and lets app_main return. Keep ownership of SD, codec, display and dark-touch
+polling on that task; moving encoding into a concurrent SD/UI owner is not a fix.
+Keep the target encoder self-test and log task minimum-free bytes after it and recordings.

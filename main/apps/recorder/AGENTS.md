@@ -7,7 +7,7 @@
 - `recorder_hold_input.h`：统一实体 KEY 与触摸的按住/释放；暗屏触摸有 300 ms 门槛和残留触点抑制。暗屏只在主任务轮询 I2C，LVGL 保持暂停，录音不唤醒屏幕。
 - `recorder_control_state.*`：录音、播放、音量与电源的纯状态机；后台发送/等待不能禁止录音。
 - `recorder_assistant_ui.*`：纯展示映射；录音状态优先于前一条请求的错误提示，始终显示松开发送。
-- `recorder_app.cc`：唯一 SD/codec 主循环；每轮最多一个网络事件、一个 4096 字节上传块、一个 1024 样本播放块。上传缓冲区在堆上复用，TLS/JSON 工作需保留 main 栈余量。
+- `recorder_app.cc`：唯一 SD/codec 主循环；每轮最多一个网络事件、一个 4096 字节上传块、一个 1024 样本播放块。上传缓冲区在堆上复用，`StartRecorderApp()` 创建 24 KiB 栈的专用任务，AMR 搜索/TLS/JSON 工作必须保留栈余量。
 - `recorder_turn_queue.h`：在途队首固定，保存新的录音只追加，完成/终态失败后才出队。启动后不得再调用会清理 `.part` 的 `ListPending()`。
 - `recorder_reply_download.*`：使用严格同源 HTTPS 和原设备 Token，后台 12 KiB 任务完成一次 GET，8 KiB 有界接收缓冲由主任务读取到 SD，不发送逐块 ACK。拒绝重定向/错误状态/长度不符，15 秒无进度重连重取已完成 turn，不能调用模型重新生成。
 - `recorder_playback_stream.*`：可暂停的 8/16/24 kHz PCM16 单声道 WAV 与 AMR-NB 游标；AMR 每帧解码为 160 个 8 kHz 样本；与 resampler 一起跨录音保留，不读文件即暂停。录音时禁用输出，松手保存后自动续播，回复按完成顺序播放。
@@ -34,3 +34,9 @@ encoder 流式分帧/尾帧补齐/重置测试和启动目标编码器自检必�
 暗屏固定持有一层显示 pause，RecorderDisplayCanResume 必须阻止 SD/录音代码释放这一层。
 FlushDisplayThenPause 只能新增自己的 pause，不能预先 Resume；否则黑屏时会启动 LVGL，
 与手动触摸/SD 争用并可能引发重启、亮屏和重新联网。息屏没有网络停止操作。
+
+## 2.2.10 启动栈修复
+
+AMR-NB 编码器的 `code_10i40_35bits` 在原 8 KiB main 栈上触发保护异常，表现为持续重启闪屏。
+所有录音初始化和主循环移至同一个 24 KiB 专用任务；禁止只移除自检，因为实际录音仍需该栈。
+启动编码自检和每条录音保存后输出栈最低余量；真机必须确认两个 codec 自检成功、联网及连续运行。

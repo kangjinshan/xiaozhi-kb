@@ -13,7 +13,7 @@
 
 | 文件/目录 | 职责 | 关键类 / 方法 |
 | --- | --- | --- |
-| `main.cc` | 固件入口与模式分派 | `app_main()`、`AppModeRead()`、`RunMicApp()` |
+| `main.cc` | 固件入口与模式分派 | `app_main()`、`AppModeRead()`、`StartRecorderApp()`、`StartMicApp()` |
 | `application.*` | 小智模式的主事件循环、音频与协议协调 | `Application::Initialize()`、`Application::Run()`、`Application::Schedule()` |
 | `device_state_machine.*` | 校验并广播设备状态迁移 | `DeviceStateMachine::TransitionTo()`、`CanTransitionTo()` |
 | `assets.*` | assets 分区映射、字体/模型资源应用和下载 | `Assets::Apply()`、`GetAssetData()`、`Download()` |
@@ -26,7 +26,7 @@
 
 ## 3. 核心流程
 
-- **启动分派**：`app_main()` 先记录 `esp_reset_reason()`，再经 `AppModeRead()` → `RunKeyboardApp()` / `RunRecorderApp()` / `StartMicApp()` / `RunAppSelector()` / `Application::Run()`；Mic 创建 40 KiB 独立任务后 `app_main` 返回，以容纳 ESP-SR 与实时 UDP 工作帧。
+- **启动分派**：`app_main()` 先记录 `esp_reset_reason()`，再经 `AppModeRead()` → `RunKeyboardApp()` / `StartRecorderApp()` / `StartMicApp()` / `RunAppSelector()` / `Application::Run()`；神勇创建 24 KiB 录音任务（AMR 编码搜索超过原 8 KiB main 栈），Mic 创建 40 KiB 独立任务后 `app_main` 返回，以容纳 ESP-SR 与实时 UDP 工作帧。
 - **小智语音**：`Application::Initialize()` → `Board::StartNetwork()` → `InitializeProtocol()` → `Application::Run()` 消费事件位并驱动 `AudioService`。
 - **模式切换**：选择器触摸回调 → `AppModeWriteAndReboot()` → NVS `appsel/mode` 提交 → `esp_restart()` → 新模式入口。
 - **Mic 音频**：`RunMicApp()` → `BoxAudioCodec` 双通道采集 → `MicStereoProcessor` → Wi-Fi UDP 实时 PCM 与可选 SD WAV 两个并行消费者；START/STOP 只影响后者。

@@ -29,6 +29,8 @@
 - **键鼠 profile**：键鼠按钮调用 `AppModeWriteKeyboardAndReboot()`；历史 profile 在 `KeyboardProfileRead()` 中统一迁移为 profile 2。触控板报告暂时拥塞时由 BLE 子模块保留 NimBLE 控制缓冲、有界累计位移并在恢复后分片排空，模式切换时清除残留。
 - **Mic 启动**：Mic 按钮写入字符串 `mic` → 重启 → `StartMicApp()` 创建独立任务 → `RunMicApp()` 立即持续发送实时流，应用内 MENU 再写回 `selector`。
 
+- **神勇启动**：`StartRecorderApp()` 创建 24 KiB 独立任务后 `app_main` 返回，释放原 8 KiB 栈；AMR 自检和每次保存记录栈最低余量。SD、codec 和显示仍由单一录音任务协调。
+
 - **神勇盲操作**：亮屏大按钮、息屏任意位置 300 ms 长按、KEY 按住均进入同一录音链路；触摸和 KEY 的释放由 `RecorderHoldInput` 汇总。息屏触摸只由主任务轮询，LVGL tick 已停止，计时必须使用 `esp_timer_get_time()`；历史浏览不再接入。
 
 ## 4. 关键资源与副作用

@@ -72,7 +72,11 @@ extern "C" void app_main(void)
 
     if (mode == AppMode::kRecorder) {
         ESP_LOGI(TAG, "boot -> recorder app");
-        RunRecorderApp();  // Runs the SD-card recorder app and never returns
+        if (!StartRecorderApp()) {
+            ESP_LOGE(TAG, "Recorder app task creation failed");
+        }
+        // Release the 8 KiB main stack; AMR encoding needs the recorder's
+        // dedicated stack. SD, codec and display retain one task owner.
         return;
     }
 

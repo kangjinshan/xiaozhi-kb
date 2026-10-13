@@ -54,6 +54,9 @@ constexpr uint32_t kPmicReadWarnMs = 1000;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
 const char* kAgentRoot = "/sdcard/shenyong";
 constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
+// AMR-NB's codebook search exceeds the ESP-IDF main task's 8 KiB stack.
+// Keep all recorder side effects on one task, with room for codec and TLS.
+constexpr uint32_t kRecorderTaskStackBytes = 24 * 1024;
 
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
 i2c_master_dev_handle_t s_pmic = nullptr;
@@ -374,7 +377,21 @@ void FlushDisplayThenPause(uint32_t ms = 90) {
     RecorderDisplayPause();
 }
 
+void RecorderTask(void*) {
+    RunRecorderApp();
+    vTaskDelete(nullptr);
+}
+
 }  // namespace
+
+bool StartRecorderApp() {
+    const BaseType_t result = xTaskCreate(
+        RecorderTask, "recorder_app", kRecorderTaskStackBytes, nullptr, 1, nullptr);
+    if (result != pdPASS) return false;
+    ESP_LOGI(TAG, "Recorder task created stack=%u bytes",
+             static_cast<unsigned>(kRecorderTaskStackBytes));
+    return true;
+}
 
 void RunRecorderApp() {
     ESP_LOGI(TAG, "recorder app starting");
@@ -432,6 +449,8 @@ void RunRecorderApp() {
         amr_encoder.Process(std::vector<int16_t>(320, 0), &encoder_probe) &&
         amr_encoder.Flush(&encoder_probe) && encoder_probe.size() == 32 && amr_encoder.Reset();
     ESP_LOGI(TAG, "AMR-NB encoder self-test: %s", encoder_ready ? "ok" : "failed");
+    ESP_LOGI(TAG, "Recorder task stack minimum free=%u bytes after AMR self-test",
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 
     AgentVoiceState voice_state;
     RecorderTurnQueue turn_queue;
@@ -1164,6 +1183,8 @@ void RunRecorderApp() {
                      static_cast<unsigned>(secs),
                      static_cast<unsigned>(wav_bytes));
             ESP_LOGI(TAG, "Agent user AMR stored: %s", cur_path.c_str());
+            ESP_LOGI(TAG, "Recorder task stack minimum free=%u bytes after recording",
+                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
             turn_queue.Push({recording_paths, AgentTurnStatus::kRecorded,
                              wav_bytes, wav_sha256, recording_created_at_ms});
             sync_pending();
