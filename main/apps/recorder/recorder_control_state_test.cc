@@ -26,7 +26,7 @@ void TestTouchRecordAndStop() {
     Check(state.mode == RecorderControlMode::kIdle, "idle state restored");
 }
 
-void TestAgentVoicePhaseGatesRecordingAndStartsReplyPlayback() {
+void TestRecordingContinuesDuringAgentTurns() {
     RecorderControlState offline;
     offline.voice_phase = AgentVoicePhase::kOffline;
     Check(RecorderControlReduce(&offline, RecorderControlEvent::kTouchRecord) ==
@@ -41,18 +41,18 @@ void TestAgentVoicePhaseGatesRecordingAndStartsReplyPlayback() {
         RecorderControlState busy;
         busy.voice_phase = phase;
         Check(RecorderControlReduce(&busy, RecorderControlEvent::kTouchRecord) ==
-                  RecorderControlAction::kNone,
-              "recording is rejected while an Agent turn is active");
-        Check(busy.mode == RecorderControlMode::kIdle,
-              "rejected recording remains idle");
+                  RecorderControlAction::kStartRecording,
+              "a second recording starts while the previous turn is active");
+        Check(busy.mode == RecorderControlMode::kRecording,
+              "busy network does not block the microphone");
     }
 
     RecorderControlState queued;
     queued.voice_phase = AgentVoicePhase::kOffline;
     queued.voice_turn_pending = true;
     Check(RecorderControlReduce(&queued, RecorderControlEvent::kTouchRecord) ==
-              RecorderControlAction::kNone,
-          "offline queued turn blocks a second recording");
+              RecorderControlAction::kStartRecording,
+          "offline recordings can queue");
     Check(RecorderControlReduce(&queued, RecorderControlEvent::kTouchPlay) ==
               RecorderControlAction::kNone,
           "queued turn blocks manual playback from starving network events");
@@ -64,6 +64,21 @@ void TestAgentVoicePhaseGatesRecordingAndStartsReplyPlayback() {
           "completed Agent reply starts playback");
     Check(reply.mode == RecorderControlMode::kPlaying,
           "Agent reply enters playing state");
+}
+
+void TestHoldInterruptsPlaybackAndReplyWaitsForRelease() {
+    for (auto mode : {RecorderControlMode::kPlaying, RecorderControlMode::kPaused}) {
+        RecorderControlState state{mode, 70};
+        Check(RecorderControlReduce(&state, RecorderControlEvent::kTouchRecord) ==
+                  RecorderControlAction::kStartRecording, "hold interrupts playback");
+        Check(RecorderControlReduce(&state, RecorderControlEvent::kAgentReplyReady) ==
+                  RecorderControlAction::kNone, "reply must not interrupt recording");
+        Check(state.mode == RecorderControlMode::kRecording, "microphone keeps priority");
+        RecorderControlReduce(&state, RecorderControlEvent::kTouchStop);
+        Check(RecorderControlReduce(&state, RecorderControlEvent::kAgentReplyReady) ==
+                  RecorderControlAction::kStartAgentReplyPlayback,
+              "queued reply automatically plays after release");
+    }
 }
 
 void TestIdlePlayOpensMenuAndSelectionStartsPlayback() {
@@ -182,7 +197,8 @@ void TestMenuHoldTiming() {
 
 int main() {
     TestTouchRecordAndStop();
-    TestAgentVoicePhaseGatesRecordingAndStartsReplyPlayback();
+    TestHoldInterruptsPlaybackAndReplyWaitsForRelease();
+    TestRecordingContinuesDuringAgentTurns();
     TestIdlePlayOpensMenuAndSelectionStartsPlayback();
     TestRecordingIgnoresPhysicalKeys();
     TestIdleIgnoresPhysicalKeys();

@@ -19,7 +19,7 @@ int main() {
     assert(AgentVoiceReduce(&state, AgentVoiceEvent::kServerReady) ==
            AgentVoiceAction::kSendQueuedTurn);
     assert(state.phase == AgentVoicePhase::kSending);
-    assert(!AgentVoiceCanRecord(state));
+    assert(AgentVoiceCanRecord(state));
 
     assert(AgentVoiceReduce(&state, AgentVoiceEvent::kTurnAccepted) ==
            AgentVoiceAction::kWaitForReply);
@@ -31,16 +31,15 @@ int main() {
 
     assert(AgentVoiceReduce(&state, AgentVoiceEvent::kReplyStored) ==
            AgentVoiceAction::kPlayReply);
-    assert(state.phase == AgentVoicePhase::kReadyToPlay);
-
-    assert(AgentVoiceReduce(&state, AgentVoiceEvent::kPlaybackStarted) ==
-           AgentVoiceAction::kNone);
-    assert(state.phase == AgentVoicePhase::kPlaying);
-    assert(AgentVoiceReduce(&state, AgentVoiceEvent::kPlaybackFinished) ==
-           AgentVoiceAction::kNone);
     assert(state.phase == AgentVoicePhase::kOnline);
     assert(!state.queued_turn);
-    assert(AgentVoiceCanRecord(state));
+
+    // Playback is independent; finishing old audio cannot clear the next upload.
+    assert(AgentVoiceReduce(&state, AgentVoiceEvent::kTurnQueued) ==
+           AgentVoiceAction::kSendQueuedTurn);
+    AgentVoiceReduce(&state, AgentVoiceEvent::kPlaybackStarted);
+    AgentVoiceReduce(&state, AgentVoiceEvent::kPlaybackFinished);
+    assert(state.phase == AgentVoicePhase::kSending && state.queued_turn);
 
     assert(AgentVoiceReduce(&state, AgentVoiceEvent::kDisconnected) ==
            AgentVoiceAction::kScheduleReconnect);

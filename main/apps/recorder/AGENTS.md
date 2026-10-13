@@ -1,0 +1,19 @@
+# 神勇设备语音模块
+
+本目录是 ESP32-C6 的独立神勇助手应用，持久模式键仍为 `recorder`。修改前阅读
+`docs/recorder-design-guardrails.md`，保留 SPI2、SD 原子发布、scrypt/WSS 认证与逐块 ACK。
+
+- `recorder_display.cc`：静态神勇界面，仅有状态与大按钮，不提供历史；主按钮按下开始、释放或移出结束。回调只发布事件。
+- `recorder_hold_input.h`：统一实体 KEY 与触摸的按住/释放；暗屏触摸有 300 ms 门槛和残留触点抑制。暗屏只在主任务轮询 I2C，LVGL 保持暂停，录音不唤醒屏幕。
+- `recorder_control_state.*`：录音、播放、音量与电源的纯状态机；后台发送/等待不能禁止录音。
+- `recorder_assistant_ui.*`：纯展示映射；录音状态优先于前一条请求的错误提示，始终显示松开发送。
+- `recorder_app.cc`：唯一 SD/codec 主循环；每轮最多一个网络事件、一个 4096 字节上传块、一个 1024 样本播放块。上传缓冲区在堆上复用，TLS/JSON 工作需保留 main 栈余量。
+- `recorder_turn_queue.h`：在途队首固定，保存新的录音只追加，完成/终态失败后才出队。启动后不得再调用会清理 `.part` 的 `ListPending()`。
+- `recorder_playback_stream.*`：可暂停的 WAV 游标；与 resampler 一起跨录音保留，不读文件即暂停。录音时禁用输出，松手保存后自动续播，回复按完成顺序播放。
+- `agent_voice_state.*`：只描述传输；播放开始/结束不能改写正在发送的下一条。
+- `/sdcard/shenyong/` 是当前专用根目录；旧金山 `/sdcard/agent` 与 `/sdcard/rec` 不导入、不自动重放、不删除。
+- `font_puhui_assistant_24_4.c` 与 `font_puhui_shenyong_36_4.c` 分别服务文案和主标题/按钮；更改中文文案后重新生成，不加载动态历史字体。
+
+必须运行 guardrails 中全部主机测试、`recorder_concurrency_test`、运行日志判定测试和
+ESP-IDF 5.5.3 的 `idf.py build`。真机验证连续两条录音、自动播报、播报中插话和串口无
+SPI2/栈/哈希错误。网络与硬件的真实验收不得用纯 reducer 测试代替。

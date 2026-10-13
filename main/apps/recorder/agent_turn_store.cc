@@ -223,7 +223,7 @@ AgentTurnStore::~AgentTurnStore() {
 
 AgentTurnPaths AgentTurnStore::Create(const std::string& date,
                                       const std::string& turn_id) {
-    if (!IsSafeComponent(date, 8) || !IsSafeComponent(turn_id)) {
+    if ((date != "unsynced" && !IsSafeComponent(date, 8)) || !IsSafeComponent(turn_id)) {
         return {};
     }
     const std::string date_directory = root_ + "/" + date;
@@ -289,7 +289,7 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
     struct dirent* date_entry = nullptr;
     while ((date_entry = readdir(root)) != nullptr) {
         const std::string date = date_entry->d_name;
-        if (!IsSafeComponent(date, 8)) {
+        if ((date != "unsynced" && !IsSafeComponent(date, 8))) {
             continue;
         }
         const std::string date_path = root_ + "/" + date;

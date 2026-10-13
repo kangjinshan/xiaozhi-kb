@@ -1,12 +1,12 @@
 # apps 应用模式开发指南
 
-> 最后更新：2026-08-19
+> 最后更新：2026-10-13
 > 位置：`main/apps/`
 
 ## 1. 模块概述
 
 本目录把同一块设备划分为互斥的启动应用。选择器将模式写入 NVS 后重启，
-`app_main()` 在下一次启动进入小智、BLE 键鼠、金山 AI 或实时立体声 Wi-Fi Mic。
+`app_main()` 在下一次启动进入小智、BLE 键鼠、神勇 或实时立体声 Wi-Fi Mic。
 各应用自行初始化所需的显示、I2C、codec、网络或 BLE 资源，不能在运行时并存。
 
 ## 2. 核心代码结构
@@ -18,7 +18,7 @@
 | `app_mode_keys.*` | 键盘 profile NVS key | `KeyboardProfileNvsKey()` |
 | `app_selector.cc` | 四个应用按钮的 LVGL 选择界面 | `BuildSelectorUI()`、`OnSelectorButtonClicked()`、`CreateModeButton()` |
 | `ble_keyboard/` | BLE HID 键盘和触控板应用 | 见 `ble_keyboard/AGENTS.md` |
-| `recorder/` | 金山 AI 录音、传输、回复和历史应用 | 先读 `docs/recorder-design-guardrails.md` |
+| `recorder/` | 神勇单按钮录音、FIFO 传输和自动播报应用 | 先读 `docs/recorder-design-guardrails.md` |
 | `mic/` | 双 ES7210 麦克风、ESP-SR 降噪、Wi-Fi UDP 实时 PCM 和可选 SD 录音 | 见 [Mic 指南](mic/AGENTS.md) |
 
 ## 3. 核心业务流程
@@ -28,6 +28,8 @@
 - **读取模式**：`app_main()` → `AppModeRead()` 读取 `appsel/mode`；缺失或非法值一律回到 `kSelector`。
 - **键鼠 profile**：键鼠按钮调用 `AppModeWriteKeyboardAndReboot()`；历史 profile 在 `KeyboardProfileRead()` 中统一迁移为 profile 2。触控板报告暂时拥塞时由 BLE 子模块保留 NimBLE 控制缓冲、有界累计位移并在恢复后分片排空，模式切换时清除残留。
 - **Mic 启动**：Mic 按钮写入字符串 `mic` → 重启 → `StartMicApp()` 创建独立任务 → `RunMicApp()` 立即持续发送实时流，应用内 MENU 再写回 `selector`。
+
+- **神勇盲操作**：亮屏大按钮、息屏任意位置 300 ms 长按、KEY 按住均进入同一录音链路；触摸和 KEY 的释放由 `RecorderHoldInput` 汇总。息屏触摸只由主任务轮询，LVGL tick 已停止，计时必须使用 `esp_timer_get_time()`；历史浏览不再接入。
 
 ## 4. 关键资源与副作用
 

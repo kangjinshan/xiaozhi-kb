@@ -10,23 +10,12 @@
 #include <string>
 #include <vector>
 
-struct RecorderDisplayMenuItem {
-    std::string label;
-    std::string detail;
-    std::string path;
-    bool conversation_detail = false;
-};
-
 using RecorderDisplayCallback = void (*)(void* user_data);
-using RecorderDisplayFileCallback = void (*)(const char* path, void* user_data);
 
 struct RecorderDisplayCallbacks {
     RecorderDisplayCallback record = nullptr;
     RecorderDisplayCallback stop = nullptr;
-    RecorderDisplayCallback open_menu = nullptr;
-    RecorderDisplayCallback pause_resume = nullptr;
     RecorderDisplayCallback exit = nullptr;
-    RecorderDisplayFileCallback play_file = nullptr;
 };
 
 // 录音 app 的独立屏幕显示（AMOLED SH8601 + LVGL）。
@@ -48,8 +37,7 @@ void RecorderDisplaySetCallbacks(const RecorderDisplayCallbacks& callbacks,
 void RecorderDisplayRenderAssistant(const RecorderAssistantUiModel& model);
 
 // 屏和 SD 卡共用 SPI2。执行 SD 大块读写前暂停 LVGL 刷屏，结束后恢复。
-// 暂停期间同一任务仍可调用 RecorderDisplayRenderAssistant/
-// RecorderDisplayShowFileMenu 更新对象；
+// 暂停期间同一任务仍可调用 RecorderDisplayRenderAssistant 更新对象；
 // 恢复后再统一刷新到屏幕。
 void RecorderDisplayPause();
 void RecorderDisplayResume();
@@ -58,8 +46,7 @@ void RecorderDisplayResume();
 // 与共享 SPI2 上的 SD I/O 竞争；亮屏后重绘当前对象树。
 esp_err_t RecorderDisplaySetScreenOn(bool screen_on);
 
-// 展示或隐藏录音文件菜单。items 由调用方扫描 SD 卡后传入。
-void RecorderDisplayShowFileMenu(const std::vector<RecorderDisplayMenuItem>& items);
-void RecorderDisplayHideFileMenu();
+// 主任务轮询息屏触摸：长按任意位置录音，释放发送，不唤醒 AMOLED。
+void RecorderDisplayPollDarkTouch();
 
 #endif  // RECORDER_DISPLAY_H_

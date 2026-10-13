@@ -27,12 +27,11 @@ void TestReadyAndOfflineActions() {
     auto model = RecorderBuildAssistantUi(BaseInput());
     Check(model.connection_label == "已连接", "ready connection label");
     Check(model.title == "准备好了", "ready title");
-    Check(model.subtitle == "请说话", "ready guidance");
-    Check(model.primary_label == "点击说话", "ready primary label");
+    Check(model.subtitle == "松开后自动发送", "ready guidance");
+    Check(model.primary_label == "按住说话", "ready primary label");
     Check(model.primary_action == RecorderAssistantPrimaryAction::kTalk,
           "ready primary action");
     Check(model.primary_enabled, "ready primary enabled");
-    Check(model.history_visible, "ready history visible");
 
     auto offline = BaseInput();
     offline.voice_phase = AgentVoicePhase::kOffline;
@@ -49,17 +48,16 @@ void TestListeningShowsTimerAndSendAction() {
     input.mode = RecorderControlMode::kRecording;
     input.elapsed_seconds = 65;
     const auto model = RecorderBuildAssistantUi(input);
-    Check(model.title == "正在聆听", "listening title");
-    Check(model.subtitle == "说完后点击发送", "listening guidance");
+    Check(model.title == "正在录音", "listening title");
+    Check(model.subtitle == "说完松手即可", "listening guidance");
     Check(model.metric == "01:05", "listening timer");
-    Check(model.primary_label == "发送", "listening primary label");
+    Check(model.primary_label == "松开发送", "listening primary label");
     Check(model.primary_action == RecorderAssistantPrimaryAction::kSend,
           "listening send action");
     Check(model.primary_enabled, "listening primary enabled");
-    Check(!model.history_visible, "listening hides history");
 }
 
-void TestAgentBusyPhasesDisableConversationActions() {
+void TestAgentBusyPhasesKeepRecordingAvailable() {
     struct Expected {
         AgentVoicePhase phase;
         const char* title;
@@ -75,10 +73,9 @@ void TestAgentBusyPhasesDisableConversationActions() {
         input.turn_pending = true;
         const auto model = RecorderBuildAssistantUi(input);
         Check(model.title == expected.title, "busy phase title");
-        Check(model.primary_action == RecorderAssistantPrimaryAction::kNone,
-              "busy phase has no action");
-        Check(!model.primary_enabled, "busy phase disables primary");
-        Check(!model.history_visible, "busy phase hides history");
+        Check(model.primary_action == RecorderAssistantPrimaryAction::kTalk,
+              "busy phase still offers push to talk");
+        Check(model.primary_enabled, "busy phase keeps microphone available");
     }
 
     auto queued = BaseInput();
@@ -94,19 +91,19 @@ void TestSpeakingPauseResumeAndVolumeClamp() {
     input.mode = RecorderControlMode::kPlaying;
     input.volume = 108;
     auto model = RecorderBuildAssistantUi(input);
-    Check(model.title == "正在播报", "speaking title");
-    Check(model.metric == "音量 100", "speaking volume clamps high");
-    Check(model.primary_label == "暂停", "speaking primary label");
-    Check(model.primary_action == RecorderAssistantPrimaryAction::kPause,
+    Check(model.title == "神勇正在回答", "speaking title");
+    Check(model.metric.empty(), "playback UI has no secondary volume panel");
+    Check(model.primary_label == "按住说话", "speaking primary label");
+    Check(model.primary_action == RecorderAssistantPrimaryAction::kTalk,
           "speaking pause action");
 
     input.mode = RecorderControlMode::kPaused;
     input.volume = -4;
     model = RecorderBuildAssistantUi(input);
-    Check(model.title == "已暂停", "paused title");
-    Check(model.metric == "音量 0", "paused volume clamps low");
-    Check(model.primary_label == "继续", "paused primary label");
-    Check(model.primary_action == RecorderAssistantPrimaryAction::kResume,
+    Check(model.title == "神勇正在回答", "paused title");
+    Check(model.metric.empty(), "no secondary status metrics");
+    Check(model.primary_label == "按住说话", "paused primary label");
+    Check(model.primary_action == RecorderAssistantPrimaryAction::kTalk,
           "paused resume action");
 }
 
@@ -143,8 +140,11 @@ void TestStorageSetupAndTransientFailuresTakePriority() {
     model = RecorderBuildAssistantUi(input);
     Check(model.title == "没有听清", "unrecognized speech title");
     Check(model.subtitle == "请再说一次", "unrecognized speech guidance");
-    Check(!model.primary_enabled,
-          "unrecognized speech notice waits before retry action");
+    Check(model.primary_enabled, "unrecognized speech allows immediate retry");
+    input.mode = RecorderControlMode::kRecording;
+    model = RecorderBuildAssistantUi(input);
+    Check(model.primary_action == RecorderAssistantPrimaryAction::kSend,
+          "earlier turn errors cannot hide the release action");
 }
 
 void TestConnectingAndRetryingRemainUnderstandable() {
@@ -177,20 +177,19 @@ void TestAssistantLayoutFitsTargetDisplay() {
              layout.menu,
              layout.brand,
              layout.connection,
-             layout.orb,
              layout.title,
              layout.subtitle,
              layout.metric,
              layout.primary,
-             layout.history,
          }) {
         Check(Fits(rect, kWidth, kHeight), "assistant widget fits display");
     }
-    Check(layout.orb.width == layout.orb.height, "assistant orb is circular");
     Check(layout.primary.width >= 320 && layout.primary.height >= 60,
           "primary talk target is prominent");
-    Check(layout.history.y > layout.primary.y + layout.primary.height,
-          "history stays secondary below primary");
+    Check(layout.primary.height >= 220 && layout.primary.width >= 380,
+          "the single talk surface dominates the small display");
+    Check(layout.subtitle.y >= layout.primary.y + layout.primary.height,
+          "helper copy stays below the talk surface");
 }
 
 }  // namespace
@@ -198,7 +197,7 @@ void TestAssistantLayoutFitsTargetDisplay() {
 int main() {
     TestReadyAndOfflineActions();
     TestListeningShowsTimerAndSendAction();
-    TestAgentBusyPhasesDisableConversationActions();
+    TestAgentBusyPhasesKeepRecordingAvailable();
     TestSpeakingPauseResumeAndVolumeClamp();
     TestStorageSetupAndTransientFailuresTakePriority();
     TestConnectingAndRetryingRemainUnderstandable();

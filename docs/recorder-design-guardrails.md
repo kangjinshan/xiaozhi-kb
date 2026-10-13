@@ -42,7 +42,7 @@ Current guard implementation:
   old PAUSE border can remain as two colored scanlines on the PLAY DONE screen.
 - Recording keeps LVGL running while waiting for microphone PCM and processing
   DSP, then pauses it only around each bounded WAV write.
-- Playback reads at most 4096 source samples with LVGL paused, resumes before
+- Playback reads at most 1024 source samples with LVGL paused, resumes before
   conversion/I2S output, and performs no SD or I2S work while paused by the
   user.
 - Recorder mode keeps SD logging disabled and only logs to serial.
@@ -96,16 +96,24 @@ Agent voice additions keep the same SPI2 ownership rule:
 - Processor errors are not all equivalent. A control frame with `retryable=true` keeps the existing reconnect/replay path. A frame with `retryable=false` is terminal for the active turn: abort any partial reply, atomically persist `failed` plus the stable error code, clear the queued reducer state, and continue with the next pending turn or online idle. `ListPending()` must exclude `failed`, while its `user.wav` remains on SD for history and diagnosis.
 - The protocol-v1 authenticated ready frame may carry `server_time_ms` and `timezone_offset_minutes`. `RecorderTurnClock` combines that baseline with elapsed monotonic time for `YYYYMMDD`, created time and fixed-width hexadecimal IDs. Legacy ready frames remain valid; an offline first recording uses `unsynced`. Do not use `%llu` in IDs or represent an unavailable wall clock as `19700101`.
 
+Runtime concurrency (2026-10-13):
+
+- `RecorderTurnQueue` holds the immutable in-flight turn at its front. Only startup calls the recovering `ListPending()` scan; appending a new recording must not unlink a receiving `.part`.
+- Process at most one network event and one upload chunk per loop. Reuse a heap buffer for uploads: a 4 KiB local array exhausts the 8 KiB main stack during TLS setup.
+- `RecorderPlaybackStream` reads bounded blocks and retains its cursor across microphone interruptions. Transport completion advances the send queue independently of playback completion.
+- Input opens only for recording; output is disabled while recording. FATFS remains on the main task with nested display pause protection.
+
 The user-facing recorder presentation is a voice assistant, not a recording utility:
 
-- The selector entry is `Jinshan AI`; the main screen identity is `金山 AI`.
-- One primary button maps to `点击说话`, `发送`, `暂停`, or `继续`. It is disabled while a turn is sending, thinking, or receiving.
-- Empty STT uses the terminal notice `没有听清` / `请再说一次`; after the bounded notice interval the talk action becomes available again instead of replaying the same WAV forever.
+- The selector entry is `Shenyong AI`; the main screen identity is `神勇`. New audio and history use `/sdcard/shenyong/`; old Jinshan directories are not replayed or displayed.
+- One primary button uses `PRESSED` to start recording and `RELEASED` / `PRESS_LOST` to send. Its labels are `按住说话` / `松开发送`; sending, thinking, receiving and playback do not block new recordings. Latch the press independently of presentation changes so release always stops the microphone.
+- Empty STT uses the terminal notice `没有听清` / `请再说一次`; the talk action is immediately available instead of replaying the same WAV forever. A prior-turn notice must never hide the release action during a new recording.
 - `RecorderBuildAssistantUi()` is the only presentation-state mapper. Display callbacks publish existing reducer events and never access SD, network, or codec objects.
 - The UI uses a fixed LVGL object tree without animations or UI timers. Runtime changes only update text, colors, visibility, and disabled state.
 - Chinese fixed copy uses `font_puhui_assistant_24_4`, generated as a bounded subset from XiaoZhi's `puhui-common.ttf`. Regenerate the subset whenever fixed Chinese copy changes.
-- Dynamic history detail reuses the mmap `font_puhui_common_30_4.bin` already shipped in the assets partition; a missing partition, asset, or decoded font is a non-fatal display fallback and must not duplicate the font in the app image. Conversation rows use content height and wrapped detail text inside the existing vertically scrollable list; a fixed row height plus long-dot clipping is forbidden.
-- History labels are semantic: `你`, `AI 回复`, and legacy `录音`; completed rows read transcript/reply previews only from a published `turn.json` capped at 16 KiB. The append-only `turns.jsonl` is the authoritative completion order for legacy random `turn-lu-*` IDs, every refresh resets the list to the newest rows at the top, and a row limit must never expose only half of a turn. `.part` and `.bak` files remain hidden.
+- The current simplified UI has no history control or file browser and does not load the dynamic assets font. Fixed copy uses the 24 px subset, and the brand/action use a 36 px subset. Retained history utility tests only protect older persisted formats; they do not imply a visible feature.
+- On display changes, an active touch is handed between LVGL and dark polling without starting or stopping a second turn. Release remains authoritative.
+
 
 ESP-IDF FATFS does not provide POSIX replacement semantics for `rename()`:
 
@@ -212,6 +220,18 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   -DRECORDER_NETWORK_HOST_TEST \
   -o /tmp/recorder_network_events_test && /tmp/recorder_network_events_test
 
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -I main/apps/recorder \
+  main/apps/recorder/recorder_concurrency_test.cc \
+  main/apps/recorder/recorder_playback_stream.cc \
+  main/apps/recorder/recorder_wav_file.cc \
+  main/apps/recorder/agent_turn_store.cc \
+  -o /tmp/recorder_concurrency_test && /tmp/recorder_concurrency_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  main/apps/recorder/recorder_hold_input_test.cc \
+  -o /tmp/recorder_hold_input_test && /tmp/recorder_hold_input_test
+
 source ~/esp/esp-idf/export.sh
 idf.py build
 nm build/esp-idf/main/libmain.a | rg ' U ns_(create|pro_create)$'
@@ -222,20 +242,35 @@ idf.py -p /dev/cu.usbmodem1101 flash
 
 Real-device acceptance checks:
 
-- Jinshan AI boot reaches `金山 AI` / `准备好了` without reboot loops for at least 15 seconds.
+- Shenyong AI boot reaches `神勇` / `准备好了` without reboot loops for at least 15 seconds.
 - Logs show `ESP-SR NS enabled` and
   `recorder DSP: input=24000 output=16000 ns=enabled`.
 - Logs do not contain `spi_hal_setup_trans`, `Guru Meditation`, or `Rebooting`.
 - SD card mounts and self-test passes.
-- `点击说话` enters `正在聆听`; `发送` saves a 16 kHz mono PCM16 WAV whose environment-only regions are audibly quieter without clipped or missing speech. Physical keys do nothing while recording.
-- During a connected turn, the screen progresses through `正在发送`, `正在思考`, `准备回复`, and `正在播报`; the primary button is disabled while busy.
-- `历史` opens the conversation list, shows the actual latest completed turn first with adjacent `你` / `AI 回复` rows, keeps legacy `录音` labels, and renders the persisted bounded ordinary-Chinese preview without visual clipping by using wrapping and content-height cards, without changing the selected WAV playback target.
+- Holding `按住说话` enters `正在聆听`; releasing saves a 16 kHz mono PCM16 WAV whose environment-only regions are audibly quieter without clipped or missing speech. Physical keys do nothing while recording.
+- During a connected turn, the screen progresses through `正在发送`, `正在思考`, `准备回复`, and `正在播报`; the primary button remains available while busy. Record a second turn before the first reply and verify both retain the correct IDs and receive replies in order.
+- The page has only status and a single large push-to-talk target; no history, decorative orb or separate pause/resume controls.
+
 - Both a legacy 24 kHz WAV and a new 16 kHz WAV play without rebooting.
-- `暂停` stops audible output, `继续` continues from the same position, and
-  the screen stays responsive throughout.
+- Holding during playback stops audible output and records; releasing resumes from the same position. Replies arriving during recording wait until release. The screen, heartbeat and chunk ACKs remain responsive throughout.
 - Playback left/right clicks adjust volume by +10/-10 and clamp it to 0–100.
 - A short `MENU` press does nothing; a continuous two-second hold returns to
   the application selector.
 - A PWR short press turns only the AMOLED off, a second short press turns it on
   and redraws the current assistant state. Background voice and network work
   continue while dark, and touch does not wake the screen.
+
+## 2026-10-13 dark-screen operation
+
+KEY/GPIO10 uses press-down/up for voice recording in both display states. BOOT
+single/double-click lowers/raises playback volume. `RecorderHoldInput` combines
+touch and KEY so one release cannot stop another still-held input.
+
+While dark, LVGL remains stopped. `RecorderDisplayPollDarkTouch()` is called from
+the same main loop and reads CST9217 through I2C at most every 20 ms. A fresh
+300 ms hold anywhere starts recording; release sends without waking the panel.
+Screen-transition stale touches and brief taps are ignored. The screen-off pause
+continues to nest with SD read/write pauses.
+
+Offline end-to-end storage must accept the exact `unsynced` date produced by
+`RecorderTurnClock`; `agent_turn_store_test` checks creation and restart recovery.

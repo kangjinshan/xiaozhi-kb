@@ -33,14 +33,12 @@ AgentVoiceAction AgentVoiceReduce(AgentVoiceState* state, AgentVoiceEvent event)
             state->phase = AgentVoicePhase::kReceiving;
             return AgentVoiceAction::kReceiveReply;
         case AgentVoiceEvent::kReplyStored:
-            state->phase = AgentVoicePhase::kReadyToPlay;
-            return AgentVoiceAction::kPlayReply;
-        case AgentVoiceEvent::kPlaybackStarted:
-            state->phase = AgentVoicePhase::kPlaying;
-            return AgentVoiceAction::kNone;
-        case AgentVoiceEvent::kPlaybackFinished:
             state->phase = AgentVoicePhase::kOnline;
             state->queued_turn = false;
+            return AgentVoiceAction::kPlayReply;
+        // Audio playback must never modify the transport's active turn.
+        case AgentVoiceEvent::kPlaybackStarted:
+        case AgentVoiceEvent::kPlaybackFinished:
             return AgentVoiceAction::kNone;
         case AgentVoiceEvent::kDisconnected:
             state->phase = AgentVoicePhase::kOffline;
@@ -52,12 +50,9 @@ AgentVoiceAction AgentVoiceReduce(AgentVoiceState* state, AgentVoiceEvent event)
     return AgentVoiceAction::kNone;
 }
 
-bool AgentVoiceCanRecord(const AgentVoiceState& state) {
-    if (state.queued_turn) {
-        return false;
-    }
-    return state.phase == AgentVoicePhase::kOffline ||
-           state.phase == AgentVoicePhase::kOnline;
+bool AgentVoiceCanRecord(const AgentVoiceState&) {
+    // Recordings are persisted independently of the one in-flight request.
+    return true;
 }
 
 const char* AgentVoicePhaseTitle(AgentVoicePhase phase) {

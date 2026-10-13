@@ -1,9 +1,9 @@
 #ifndef RECORDER_APP_H_
 #define RECORDER_APP_H_
 
-// 独立的 SD 卡录音 app。开机进入后：初始化屏幕/音频/SD 卡，
-// 用最左键（KEY_LEFT_GPIO）单击开始/停止录音，录音写为 WAV 到 /sdcard/rec/。
-// 本函数不返回（内部死循环）。
+// 神勇语音助手：按住录音、松开发送，后台 FIFO 收发，回复自动播放。
+// WAV 和清单保存到 /sdcard/shenyong；主任务协调 SPI2、音频和网络。
+// 本函数不返回。
 void RunRecorderApp();
 
 #endif  // RECORDER_APP_H_

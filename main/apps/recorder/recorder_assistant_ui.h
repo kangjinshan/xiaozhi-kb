@@ -46,7 +46,6 @@ struct RecorderAssistantUiModel {
     RecorderAssistantPrimaryAction primary_action =
         RecorderAssistantPrimaryAction::kNone;
     bool primary_enabled = false;
-    bool history_visible = false;
 };
 
 struct RecorderAssistantRect {
@@ -60,12 +59,10 @@ struct RecorderAssistantLayout {
     RecorderAssistantRect menu;
     RecorderAssistantRect brand;
     RecorderAssistantRect connection;
-    RecorderAssistantRect orb;
     RecorderAssistantRect title;
     RecorderAssistantRect subtitle;
     RecorderAssistantRect metric;
     RecorderAssistantRect primary;
-    RecorderAssistantRect history;
 };
 
 RecorderAssistantUiModel RecorderBuildAssistantUi(

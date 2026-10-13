@@ -1,10 +1,10 @@
 # XiaoZhi KB 协作开发指南
 
-> 最后更新：2026-08-19
+> 最后更新：2026-10-13
 
 ## 1. 系统概述
 
-本仓库基于小智 ESP32 开源固件，主要适配 `Waveshare ESP32-C6-Touch-AMOLED-2.16`。固件通过 NVS 在五种启动状态间分派：应用选择器、小智语音、BLE HID 键盘/触控板、金山 AI 语音助手（内部模式名仍为 recorder）和实时立体声 Wi-Fi Mic。
+本仓库基于小智 ESP32 开源固件，主要适配 `Waveshare ESP32-C6-Touch-AMOLED-2.16`。固件通过 NVS 在五种启动状态间分派：应用选择器、小智语音、BLE HID 键盘/触控板、神勇 语音助手（内部模式名仍为 recorder）和实时立体声 Wi-Fi Mic。
 
 核心技术栈为 C/C++、ESP-IDF 5.5.3、FreeRTOS、LVGL、Apache NimBLE HID、FATFS/SDSPI、ESP-SR 和 NVS。目标芯片是 ESP32-C6，默认分区表为 `partitions/v2/16m_c3.csv`。
 
@@ -13,7 +13,7 @@
 | 目录 | 职责 | 关键说明 | AGENTS.md |
 | --- | --- | --- | --- |
 | `main/` | 固件入口、语音主循环、音频、显示、协议与板级适配 | `main/main.cc` 负责模式分派 | [组件指南](main/AGENTS.md) |
-| `main/apps/` | 选择器与键盘、金山 AI、Mic 三个独立应用 | 模式值由 `AppModeRead()` 读取 | [应用层指南](main/apps/AGENTS.md) |
+| `main/apps/` | 选择器与键盘、神勇、Mic 三个独立应用 | 模式值由 `AppModeRead()` 读取 | [应用层指南](main/apps/AGENTS.md) |
 | `main/apps/mic/` | 双麦采集、ESP-SR 降噪、Wi-Fi UDP PCM 和可选 SD WAV | 实时流不依赖录音按钮 | [Mic 指南](main/apps/mic/AGENTS.md) |
 | `main/audio/codecs/` | 外部 codec 与 I2S 适配 | `BoxAudioCodec` 支持显式 ES7210 输入 mask | [Codec 指南](main/audio/codecs/AGENTS.md) |
 | `main/boards/waveshare/esp32-c6-touch-amoled-2.16/` | 目标板 GPIO、PMIC、AMOLED、触摸与 SD 初始化 | SPI2 共享约束是最高风险点 | [开发指南](main/boards/waveshare/esp32-c6-touch-amoled-2.16/AGENTS.md) |
@@ -47,21 +47,21 @@
   - 核心逻辑：`BoxAudioCodec` 同时采集 MIC1/MIC2，`MicStereoProcessor` 分别执行 24→16 kHz 并以共享 mid ESP-SR NS 保留 side，`MicWifiAudio` 每 20 ms 单播 PCM16 stereo UDP。
   - 控制规则：KEY/GPIO10 增益 +10%，BOOT/GPIO9 增益 -10%，AXP2101 PWR 只切换屏幕；触摸 START/STOP 录制 `/sdcard/mic/micNNNN.wav`，MENU 完成文件后回到选择器。
   - 实时规则：进入 Mic 后立即持续采集；电脑端 `scripts/mic_wifi_receiver.py` 发送订阅心跳、验证 BlackHole output→input 回环并在首包后切换 macOS 默认输入，断流或退出时恢复。`scripts/install_mic_macos_service.py` 可安装用户级常驻接收服务，使设备端进入/退出 Mic 无需手动运行命令。START/STOP 只控制可选 SD WAV，不能控制网络流。macOS 默认设备变化不会迁移应用已建立的 CoreAudio 会话；豆包等无输入选择器的应用必须在切换后完全退出重开，其“系统麦克风”标签表示跟随当前默认设备。
-- **金山 AI 助手交互、录音和回放**
+- **神勇 助手交互、录音和回放**
   - 入口：`RunRecorderApp()`（`main/apps/recorder/recorder_app.cc`）
   - 核心逻辑：`RecorderBuildAssistantUi()`、`RecorderControlReduce()`、`RecorderNoiseReducer`、`RecorderRateConverter`
-  - 展示规则：`金山 AI` 静态界面只保留一个主按钮，语义为 `点击说话` / `发送` / `暂停` / `继续`；发送、思考和接收阶段禁用主按钮。
-  - 字体规则：固定中文文案从 `xiaozhi-fonts/ttf/puhui-common.ttf` 生成 `font_puhui_assistant_24_4.c` 子集；动态历史文本复用 assets 中的 `font_puhui_common_30_4.bin`，不得把完整字体重复链接进应用镜像。
-  - 历史规则：只读取不超过 16 KiB 的正式 `turn.json`，将 `transcript` / `reply_text` 映射到 `你` / `AI 回复`；优先按追加式 `turns.jsonl` 的完成顺序排列旧 turn，每次展示重置到最新记录所在的顶部，截断不得拆开一轮；缺失或损坏时退回文件大小，禁止读取 `.part` / `.bak`。
-  - 电源键规则：AXP2101 PWR 短按仅切换 AMOLED 息屏/亮屏；录音、播放、Wi-Fi、WSS、Agent 和 SD 工作继续，触摸不唤醒，长按仍由硬件管理。
-  - 副作用：新 turn 写 `/sdcard/agent/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧 `/sdcard/rec/recN.wav` 仅保留播放兼容。
+  - 展示规则：`神勇` 静态界面只保留一个主按钮，语义为 `按住说话` / `松开发送`；发送、思考、接收与播放期间均可开始新录音。回复在录音期间排队，松手后自动播放或从原位置续播。
+  - 字体规则：24 px 文案子集和 36 px 品牌/按钮子集均来自 `puhui-common.ttf`；不再初始化动态历史字体。
+  - 页面仅有连接指示、当前状态和大录音按钮；历史列表、独立暂停/继续按钮与装饰圆球已撤除。
+  - 电源键规则：AXP2101 PWR 短按仅切换 AMOLED 息屏/亮屏；播放、Wi-Fi、WSS、Agent 和 SD 工作继续；正在进行的触摸录音跨亮暗屏交接，不丢失释放事件，触摸不唤醒，长按仍由硬件管理。
+  - 副作用：新 turn 写 `/sdcard/shenyong/YYYYMMDD/<turn>/user.wav`，回复验证后写 `assistant.wav` 和原子清单；旧金山 AI 的 `/sdcard/agent` 与 `/sdcard/rec` 文件保留，但不加入神勇队列或历史。
 - **Agent 语音助手传输**
   - 入口：`RecorderNetwork`、`AgentVoiceParseControl()`、`AgentTurnStore`
   - 核心逻辑：持久 WSS、ready 帧用户时区时间基准、4096 字节有界传输、turn 幂等状态、服务端 `retryable` 失败分类和 SD 原子文件
-  - 副作用：将用户与助手 WAV/清单写入 `/sdcard/agent/`；回复块落卡后才发送累计字节 ACK；确定性失败保留用户 WAV、原子标记 `failed` 并退出待发送队列。
+  - 副作用：将用户与助手 WAV/清单写入 `/sdcard/shenyong/`；回复块落卡后才发送累计字节 ACK；确定性失败保留用户 WAV、原子标记 `failed` 并退出待发送队列。
 - **AMOLED 与 SD 卡共享 SPI2**
   - 入口：目标板构造函数和 `RecorderDisplayPause()` / `RecorderDisplayResume()`
-  - 核心逻辑：SD 初始化或大块 I/O 前停止 LVGL 并取得 LVGL 锁；金山 AI 息屏额外持有一层可嵌套 pause，SH8601 命令只在 Recorder 主任务执行
+  - 核心逻辑：SD 初始化或大块 I/O 前停止 LVGL 并取得 LVGL 锁；神勇 息屏额外持有一层可嵌套 pause，SH8601 命令只在 Recorder 主任务执行
   - 失败表现：`spi_hal_setup_trans ... running_cmd == 0`，设备约每秒重启并闪屏。
 - **真机稳定性验证**
   - 入口：`scripts/verify_selector_stability.py`、`scripts/verify_xiaozhi_stability.py`
@@ -88,7 +88,7 @@
 - 键鼠 PWR 息屏必须停止 LVGL 并持续持有显示锁；亮屏时先开启 SH8601、在锁内重建并 invalidate 九宫格，再解锁、恢复 LVGL 并唤醒任务。禁止在面板关闭期间继续提交刷新帧。
 - 键鼠亮屏时九宫格仅作位置示意，任何触摸都只能用于相对鼠标移动；暗屏时必须停止鼠标移动并恢复原九宫格键盘动作。PWR 切换后若触点仍按住，必须等到首次抬手再接受新模式输入，避免跨模式误触和光标跳变。
 - 触摸任务读取/清除 PWR IRQ 后必须先释放共享 I2C0 锁，再切换 SH8601/LVGL；只有首次显示上电所需的 PMIC 寄存器事务可以由显示模块短暂取得该锁。
-- 金山 AI 模式的 AXP2101 PMIC 轮询任务只能向 Recorder 请求队列发布 PWR 事件，禁止直接调用 SH8601、LVGL、SD、codec 或网络；息屏 pause 必须与现有 SD pause 正确嵌套。
+- 神勇 模式的 AXP2101 PMIC 轮询任务只能向 Recorder 请求队列发布 PWR 事件，禁止直接调用 SH8601、LVGL、SD、codec 或网络；息屏 pause 必须与现有 SD pause 正确嵌套。
 - 小智模式禁止调用 `SdCardLogStart()`：`sys_evt` 栈只有 2304 字节，`SdCardLogVprintf()` 同步执行 `vsnprintf`、FATFS 和 `fwrite` 会触发栈保护故障。Recorder 与 Mic 模式同样禁止启用该 hook，以免日志写卡与刷屏争用 SPI2。
 - SD 卡仍可在小智和录音模式挂载；禁用的是同步日志落盘，不是文件读写。小智/录音日志走 USB 串口。
 - 不要用不受控的 DTR/RTS 序列做运行态验证。安全监听状态为 `dtr=True, rts=False`；异常时做拔 USB、拔电池、等待 20 秒后的物理冷启动。
@@ -101,9 +101,15 @@
 - Agent 回复禁止在网络回调中直接写 SD；主任务每成功落卡一个块后发送 `reply_chunk_saved`，服务端收到精确累计字节 ACK 才能继续发送。`assistant.wav.part` 永远不可播放。
 - 设备必须区分服务端终态失败与暂时失败：`retryable=false` 的当前 turn 要在主任务中原子标记 `failed`、清除 queued 状态并恢复录音；`ListPending()` 永远排除 `failed`，但不得删除其 `user.wav`。只有 `retryable=true` 才允许断线重放。
 - turn 日期和 ID 只能由纯 `RecorderTurnClock` 生成：认证 ready 帧的 Unix 毫秒与用户 UTC 偏移配合单调时钟得到本地 `YYYYMMDD`；未同步时使用八字符 `unsynced`。禁止恢复 `%llu` 格式化或把无效墙钟写成 `19700101`，ESP-IDF nano printf 不保证 64 位格式支持。
+- 神勇的 KEY/GPIO10 在亮暗屏均为按住录音、松开发送；BOOT 单击降音量、双击升音量。触摸和实体键通过 `RecorderHoldInput` 汇总，只有最后一个按住来源释放才停止录音。
+- 息屏期间保持 LVGL 停止并持有显示 pause；仅 Recorder 主任务每 20 ms 轮询 CST9217，长按任意位置 300 ms 触发录音，短点与切换时残留触点不触发，不唤醒面板。禁止为息屏触摸恢复后台刷屏。
+- `AgentTurnStore` 的日期路径只接受八位数字或精确 `unsynced`；未联网校时也必须能录制、索引并在重启后恢复，不可仅在时钟单测中支持而在存储层拒绝。
+- Recorder 收发与播放必须按主循环分块推进：每轮最多处理一个网络事件、发送 4096 字节或播放 1024 个源样本。上传缓冲区必须在堆上复用，不得把 4 KiB 数组放到只有 8 KiB 的 main task 栈上，TLS 握手会栈溢出。
+- `RecorderTurnQueue` 固定以队首标识在途 turn，新录音仅追加；`ListPending()` 只在启动恢复时调用，因为它会清理 `.part`，运行时扫描会破坏正在接收的回复。完成回复立即让下一条发送，播放完成事件不得清除新 turn。
+- 录音期间关闭扬声器并保留 `RecorderPlaybackStream` 的文件位置与 resampler；未在录音时关闭麦克风。网络回调继续只入队，不增加并发 FATFS/LVGL 访问。
 - 单个上传 WAV 上限为 4 MiB；录音链路必须预留 DSP flush 空间并自动停止，不能生成永久无法上传的队列项。设备 token 只允许存在于忽略的 `sdkconfig` 和构建产物。
 - 助手 UI 必须通过纯 `RecorderAssistantUiInput` → `RecorderAssistantUiModel` 映射渲染，不在显示回调中访问 SD、网络或 codec；保持静态组件，不增加 LVGL 动画或 UI 定时器。
-- 动态对话字库只允许通过 `Assets` 内存映射现有 `font_puhui_common_30_4.bin`；加载失败必须非致命回退。对话详情必须自动换行并使用内容高度，禁止恢复固定高度加 `LV_LABEL_LONG_DOT` 的裁字布局；历史清单读取仍由暂停 LVGL 后的 Recorder 主任务发起。
+- 当前神勇页面不得重新接入历史浏览、动态历史字体、装饰圆球或额外播放控制；录音和自动播报共用一个大按钮。
 
 ### 已确认故障（2026-07-11）
 
@@ -116,7 +122,7 @@
 
 - 新增或调整应用模式：`main/apps/app_mode.*`、`main/main.cc`、`main/apps/app_selector.cc`。
 - 调整目标板引脚或初始化顺序：目标板目录的 `config.h` 和 `.cc`；先检查 SPI2、I2C0、USB 引脚冲突。
-- 修改金山 AI UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增固定中文前更新字体子集和展示模型测试；修改动态历史文本时同时运行 `recorder_playback_menu_test.cc`、`recorder_history_layout_test.cc` 与 `recorder_common_font_test.cc`。
+- 修改神勇 UI/音频：`main/apps/recorder/`；不得绕过显示暂停和 SD 访问约束。新增固定中文前更新 24/36 px 字体子集和展示模型测试；当前固件不提供历史入口。
 - 修改 Mic：先读 `main/apps/mic/AGENTS.md`；音频入口为 `RunMicApp()`、双声道 DSP 为 `MicStereoProcessor`、实时传输为 `MicWifiAudio`。修改协议时必须同步 `scripts/mic_wifi_receiver.py` 和两端协议测试。
 - 修改键盘触区、触控板或亮屏状态栏：先读 `main/apps/ble_keyboard/AGENTS.md`；入口为 `keyboard_touch_action.*`、`keyboard_touch_arrows.*`、`touchpad_motion.*` 和 `keyboard_zone_display.*`。触摸坐标方向只在 `ReadKeyboardTouch()` 校准一次；真机调整时同时检查鼠标移动、PWR 跨模式、电量刷新、BLE 断开和 SPI2/LVGL 稳定性。
 - 修改 SD 日志：`main/sdcard/sdcard_log.cc`；若要在系统任务中使用，必须先改为独立日志任务和有界队列，不能简单增大 `sys_evt` 栈掩盖同步 I/O。

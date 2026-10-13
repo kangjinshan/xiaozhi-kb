@@ -9,13 +9,15 @@
 #include "button.h"
 #include "app_mode.h"
 #include "codecs/box_audio_codec.h"
-#include "recorder_file_list.h"
 #include "recorder_control_state.h"
 #include "recorder_noise_reducer.h"
 #include "recorder_network.h"
 #include "recorder_rate_converter.h"
 #include "recorder_turn_clock.h"
 #include "recorder_wav_file.h"
+#include "recorder_playback_stream.h"
+#include "recorder_turn_queue.h"
+#include "recorder_hold_input.h"
 #include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
@@ -48,10 +50,8 @@ constexpr uint8_t kAxp2101Irq3StatusReg = 0x4A;
 constexpr uint32_t kPowerKeyPollMs = 25;
 constexpr uint32_t kPmicReadWarnMs = 1000;
 constexpr i2c_port_t kI2cPort = I2C_NUM_0;
-const char* kRecDir = "/sdcard/rec";
-const char* kAgentRoot = "/sdcard/agent";
+const char* kAgentRoot = "/sdcard/shenyong";
 constexpr int kFrameSamples = 1024;  // 每次读取的采样点数（单声道）
-constexpr size_t kPlaybackReadSamples = 4096;
 
 i2c_master_bus_handle_t s_i2c_bus = nullptr;
 i2c_master_dev_handle_t s_pmic = nullptr;
@@ -64,6 +64,7 @@ struct RecorderRequest {
 
 std::mutex s_request_mutex;
 std::deque<RecorderRequest> s_requests;
+RecorderHoldInput s_hold_input;
 
 esp_err_t WriteReg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val) {
     const uint8_t buf[2] = {reg, val};
@@ -264,6 +265,16 @@ void PublishRequest(RecorderControlEvent event, const char* path = nullptr) {
     s_requests.push_back({event, path != nullptr ? path : ""});
 }
 
+void PublishHold(RecorderHoldSource source, bool pressed) {
+    std::lock_guard<std::mutex> lock(s_request_mutex);
+    const auto action = s_hold_input.Set(source, pressed);
+    if (action == RecorderHoldAction::kStart) {
+        s_requests.push_back({RecorderControlEvent::kTouchRecord, ""});
+    } else if (action == RecorderHoldAction::kStop) {
+        s_requests.push_back({RecorderControlEvent::kTouchStop, ""});
+    }
+}
+
 void RecorderPowerKeyTask(void*) {
     TickType_t last_warning_tick = 0;
     bool warning_logged = false;
@@ -325,29 +336,15 @@ bool TakeRequest(RecorderRequest* request) {
 }
 
 void OnRecordRequested(void*) {
-    PublishRequest(RecorderControlEvent::kTouchRecord);
+    PublishHold(RecorderHoldSource::kTouch, true);
 }
 
 void OnStopRequested(void*) {
-    PublishRequest(RecorderControlEvent::kTouchStop);
-}
-
-void OnOpenPlaybackMenu(void*) {
-    PublishRequest(RecorderControlEvent::kTouchPlay);
-}
-
-void OnPauseResumeRequested(void*) {
-    PublishRequest(RecorderControlEvent::kTouchPauseResume);
+    PublishHold(RecorderHoldSource::kTouch, false);
 }
 
 void OnExitRequested(void*) {
     PublishRequest(RecorderControlEvent::kExitRequested);
-}
-
-void OnPlayFileRequested(const char* path, void*) {
-    if (path != nullptr) {
-        PublishRequest(RecorderControlEvent::kPlaybackSelected, path);
-    }
 }
 
 struct RecorderAssistantRenderContext {
@@ -404,156 +401,10 @@ RecorderControlAction ApplyRequest(const RecorderRequest& request,
     return action;
 }
 
-void DrainPlaybackRequests(RecorderControlState* control,
-                           BoxAudioCodec* codec,
-                           bool* exit_requested,
-                           RecorderAssistantRenderContext* ui_context) {
-    RecorderRequest request;
-    while (TakeRequest(&request)) {
-        ApplyRequest(request, control, codec, exit_requested, ui_context);
-    }
-}
-
 void FlushDisplayThenPause(uint32_t ms = 90) {
     RecorderDisplayResume();
     vTaskDelay(pdMS_TO_TICKS(ms));
     RecorderDisplayPause();
-}
-
-void ShowPlaybackMenu() {
-    std::vector<RecorderDisplayMenuItem> menu_items;
-    auto entries = RecorderListAgentRecordings(kAgentRoot, 32);
-    auto legacy = RecorderListRecordings(kRecDir, 32);
-    entries.insert(entries.end(), legacy.begin(), legacy.end());
-    if (entries.size() > 32) {
-        entries.resize(32);
-    }
-    menu_items.reserve(entries.size());
-    for (const auto& entry : entries) {
-        RecorderDisplayMenuItem item;
-        item.label = RecorderConversationLabel(entry);
-        item.detail = RecorderFormatRecordingDetail(entry);
-        item.path = entry.path;
-        item.conversation_detail = !entry.conversation_text.empty();
-        menu_items.push_back(item);
-    }
-    RecorderDisplayShowFileMenu(menu_items);
-}
-
-enum class PlaybackResult {
-    kDone,
-    kFailed,
-    kInterrupted,
-};
-
-// Caller enters with LVGL paused. Every return path leaves exactly one pause
-// held so file close and the caller's result-screen update stay SPI2-safe.
-PlaybackResult PlayWavFile(BoxAudioCodec& codec,
-                           const char* path,
-                           RecorderControlState* control,
-                           bool* exit_requested,
-                           RecorderAssistantRenderContext* ui_context) {
-    FILE* playback = fopen(path, "rb");
-    if (playback == nullptr) {
-        ESP_LOGE(TAG, "无法打开播放文件 %s", path);
-        return PlaybackResult::kFailed;
-    }
-
-    uint8_t header[44];
-    const size_t header_bytes = fread(header, 1, sizeof(header), playback);
-    RecorderWavInfo info = {};
-    if (header_bytes != sizeof(header) ||
-        !RecorderParseWavHeader(header, sizeof(header), &info) ||
-        !RecorderWavCanPlay(info, codec.output_sample_rate(), codec.output_channels())) {
-        ESP_LOGE(TAG, "不支持播放的 WAV: %s", path);
-        fclose(playback);
-        return PlaybackResult::kFailed;
-    }
-
-    RecorderRateConverter playback_rate(info.sample_rate, codec.output_sample_rate());
-    if (!playback_rate.valid()) {
-        ESP_LOGE(TAG, "播放重采样器初始化失败: %u -> %d",
-                 static_cast<unsigned>(info.sample_rate),
-                 codec.output_sample_rate());
-        fclose(playback);
-        return PlaybackResult::kFailed;
-    }
-
-    if (fseek(playback, info.data_offset, SEEK_SET) != 0) {
-        fclose(playback);
-        return PlaybackResult::kFailed;
-    }
-
-    ESP_LOGI(TAG, "播放 %s (%u bytes)", path, (unsigned)info.data_bytes);
-    RecorderDisplayHideFileMenu();
-    RenderAssistant(ui_context);
-    RecorderDisplayResume();
-    codec.EnableOutput(true);
-
-    bool ok = true;
-    uint32_t remaining = info.data_bytes;
-    const size_t capacity_samples = kPlaybackReadSamples * info.channels;
-    std::vector<int16_t> playback_buf(capacity_samples);
-    while (remaining > 0 && !*exit_requested) {
-        DrainPlaybackRequests(control, &codec, exit_requested, ui_context);
-        if (*exit_requested) {
-            break;
-        }
-        if (control->mode == RecorderControlMode::kPaused) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-
-        playback_buf.resize(capacity_samples);
-        const size_t to_read = std::min(
-            static_cast<size_t>(remaining),
-            playback_buf.size() * sizeof(int16_t));
-        RecorderDisplayPause();
-        const size_t bytes = fread(playback_buf.data(), 1, to_read, playback);
-        RecorderDisplayResume();
-        if (bytes == 0) {
-            ok = false;
-            break;
-        }
-        remaining -= bytes;
-        playback_buf.resize(bytes / sizeof(int16_t));
-        std::vector<int16_t> converted;
-        if (!playback_rate.Process(playback_buf, &converted)) {
-            ok = false;
-            break;
-        }
-        if (!converted.empty()) {
-            codec.OutputData(converted);
-        }
-        DrainPlaybackRequests(control, &codec, exit_requested, ui_context);
-    }
-
-    while (control->mode == RecorderControlMode::kPaused && !*exit_requested) {
-        DrainPlaybackRequests(control, &codec, exit_requested, ui_context);
-        if (control->mode == RecorderControlMode::kPaused && !*exit_requested) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-    }
-
-    if (ok && remaining == 0 && !*exit_requested) {
-        std::vector<int16_t> converted;
-        if (!playback_rate.Flush(&converted)) {
-            ok = false;
-        } else if (!converted.empty()) {
-            codec.OutputData(converted);
-        }
-    }
-
-    RecorderDisplayPause();
-    codec.EnableOutput(false);
-    fclose(playback);
-    if (*exit_requested) {
-        ESP_LOGI(TAG, "播放中断: %s", path);
-        return PlaybackResult::kInterrupted;
-    }
-    return ok && remaining == 0
-        ? PlaybackResult::kDone
-        : PlaybackResult::kFailed;
 }
 
 }  // namespace
@@ -574,10 +425,7 @@ void RunRecorderApp() {
     RecorderDisplayCallbacks display_callbacks;
     display_callbacks.record = OnRecordRequested;
     display_callbacks.stop = OnStopRequested;
-    display_callbacks.open_menu = OnOpenPlaybackMenu;
-    display_callbacks.pause_resume = OnPauseResumeRequested;
     display_callbacks.exit = OnExitRequested;
-    display_callbacks.play_file = OnPlayFileRequested;
     RecorderDisplaySetCallbacks(display_callbacks, nullptr);
     if (!StartRecorderPowerKeyTask()) {
         ESP_LOGW(TAG, "PWR 息屏任务不可用");
@@ -589,7 +437,6 @@ void RunRecorderApp() {
     if (sd_ok) {
         // Recorder 的屏幕和 SD 卡共用 SPI2，日志 hook 会在任意 ESP_LOG 中写卡，
         // 容易与 LVGL 刷屏并发。录音模式优先保证录制/播放稳定，日志只走串口。
-        mkdir(kRecDir, 0777);
         mkdir(kAgentRoot, 0777);
     } else {
         ESP_LOGE(TAG, "SD 卡挂载失败，无法保存录音");
@@ -602,7 +449,6 @@ void RunRecorderApp() {
                         AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN,
                         AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
                         AUDIO_INPUT_REFERENCE);
-    codec.EnableInput(true);
     const int channels = codec.input_channels();
     const int sample_rate = codec.input_sample_rate();
     ESP_LOGI(TAG, "codec ready: %d Hz, %d ch", sample_rate, channels);
@@ -613,16 +459,11 @@ void RunRecorderApp() {
              noise_reducer.noise_reduction_enabled() ? "enabled" : "unavailable");
 
     AgentVoiceState voice_state;
-    AgentPendingTurn active_turn;
-    bool has_active_turn = false;
+    RecorderTurnQueue turn_queue;
     if (sd_ok) {
-        const auto pending = turn_store.ListPending();
-        if (!pending.empty()) {
-            active_turn = pending.front();
-            has_active_turn = true;
-            voice_state.queued_turn = true;
-        }
+        for (const auto& pending : turn_store.ListPending()) turn_queue.Push(pending);
     }
+    voice_state.queued_turn = !turn_queue.empty();
     RecorderControlState control{RecorderControlMode::kIdle, codec.output_volume()};
     control.voice_phase = voice_state.phase;
     control.voice_turn_pending = voice_state.queued_turn;
@@ -649,13 +490,15 @@ void RunRecorderApp() {
 
     // 5. 实体键只发布事件；状态 reducer 决定当前是否接受。
     static Button left(KEY_LEFT_GPIO);
-    left.OnClick([]() {
-        PublishRequest(RecorderControlEvent::kPhysicalLeft);
-    });
+    left.OnPressDown([]() { PublishHold(RecorderHoldSource::kKey, true); });
+    left.OnPressUp([]() { PublishHold(RecorderHoldSource::kKey, false); });
 
     static Button right(BOOT_BUTTON_GPIO);
     right.OnClick([]() {
         PublishRequest(RecorderControlEvent::kPhysicalRight);
+    });
+    right.OnDoubleClick([]() {
+        PublishRequest(RecorderControlEvent::kPhysicalLeft);
     });
 
     // 6. 所有文件、DSP 与 codec 操作都留在本任务。
@@ -676,7 +519,14 @@ void RunRecorderApp() {
     uint64_t reply_received_bytes = 0;
     mbedtls_sha256_context reply_digest;
     bool reply_digest_active = false;
-    std::string automatic_play_path;
+    std::deque<std::string> automatic_play_paths;
+    RecorderPlaybackStream playback;
+    std::unique_ptr<RecorderRateConverter> playback_rate;
+    bool speaker_enabled = false;
+    FILE* upload_file = nullptr;
+    uint64_t upload_sent = 0;
+    uint32_t upload_chunk_bytes = 0;
+    std::vector<uint8_t> upload_chunk(kAgentVoiceMaxChunkBytes);
 
     auto sync_voice_control = [&]() {
         control.voice_phase = voice_state.phase;
@@ -695,100 +545,90 @@ void RunRecorderApp() {
         reply_control = {};
     };
 
-    auto load_oldest_pending = [&]() {
-        RecorderDisplayPause();
-        const auto pending = turn_store.ListPending();
-        RecorderDisplayResume();
-        if (pending.empty()) {
-            active_turn = {};
-            has_active_turn = false;
-            voice_state.queued_turn = false;
-        } else {
-            active_turn = pending.front();
-            has_active_turn = true;
-            voice_state.queued_turn = true;
-        }
+    auto sync_pending = [&]() {
+        voice_state.queued_turn = !turn_queue.empty();
         sync_voice_control();
     };
 
+    auto close_upload = [&]() {
+        RecorderDisplayPause();
+        if (upload_file != nullptr) fclose(upload_file);
+        RecorderDisplayResume();
+        upload_file = nullptr;
+        upload_sent = 0;
+    };
+
     auto send_turn_start = [&]() -> bool {
-        if (!has_active_turn || !network.IsSocketConnected()) {
+        if (turn_queue.empty() || !network.IsSocketConnected()) {
             return false;
         }
         const std::string frame = AgentVoiceBuildTurnStart(
-            active_turn.paths.turn_id,
-            active_turn.user_bytes,
-            active_turn.user_sha256);
+            turn_queue.active().paths.turn_id,
+            turn_queue.active().user_bytes,
+            turn_queue.active().user_sha256);
         if (frame.empty() || !network.SendText(frame)) {
             return false;
         }
         RecorderDisplayPause();
         const bool updated = turn_store.UpdateState(
-            active_turn.paths, AgentTurnStatus::kSending);
+            turn_queue.active().paths, AgentTurnStatus::kSending);
         RecorderDisplayResume();
         if (!updated) {
             return false;
         }
         RenderAssistant(&ui_context);
         ESP_LOGI(TAG, "Agent turn queued for upload: %s",
-                 active_turn.paths.turn_id.c_str());
+                 turn_queue.active().paths.turn_id.c_str());
         return true;
     };
 
-    auto upload_active_turn = [&](uint32_t chunk_bytes) -> bool {
-        if (!has_active_turn || chunk_bytes == 0 ||
-            chunk_bytes > kAgentVoiceMaxChunkBytes) {
-            return false;
-        }
+    auto begin_upload = [&](uint32_t chunk_bytes) -> bool {
+        if (turn_queue.empty() || upload_file != nullptr || chunk_bytes == 0 ||
+            chunk_bytes > kAgentVoiceMaxChunkBytes) return false;
         RecorderDisplayPause();
-        FILE* upload = fopen(active_turn.paths.user_wav.c_str(), "rb");
+        upload_file = fopen(turn_queue.active().paths.user_wav.c_str(), "rb");
         RecorderDisplayResume();
-        if (upload == nullptr) {
-            return false;
-        }
-        std::vector<uint8_t> chunk(chunk_bytes);
-        uint64_t sent = 0;
-        bool ok = true;
-        while (sent < active_turn.user_bytes) {
-            const size_t wanted = static_cast<size_t>(std::min<uint64_t>(
-                chunk.size(), active_turn.user_bytes - sent));
-            RecorderDisplayPause();
-            const size_t size = fread(chunk.data(), 1, wanted, upload);
-            const bool read_failed = ferror(upload) != 0;
-            RecorderDisplayResume();
-            if (size != wanted || read_failed ||
-                !network.SendBinary(chunk.data(), size)) {
-                ok = false;
-                break;
-            }
-            sent += size;
-        }
-        RecorderDisplayPause();
-        fclose(upload);
-        RecorderDisplayResume();
-        if (!ok || sent != active_turn.user_bytes) {
-            return false;
-        }
-        return network.SendText(AgentVoiceBuildTurnEnd(active_turn.paths.turn_id));
+        upload_sent = 0;
+        upload_chunk_bytes = chunk_bytes;
+        return upload_file != nullptr;
     };
 
-    auto process_requests = [&](bool* open_menu, std::string* play_path) {
+    auto upload_one_chunk = [&]() -> bool {
+        if (upload_file == nullptr) return true;
+        const size_t wanted = static_cast<size_t>(std::min<uint64_t>(
+            upload_chunk_bytes, turn_queue.active().user_bytes - upload_sent));
+        RecorderDisplayPause();
+        const size_t size = fread(upload_chunk.data(), 1, wanted, upload_file);
+        const bool read_failed = ferror(upload_file) != 0;
+        RecorderDisplayResume();
+        if (size != wanted || read_failed || !network.SendBinary(upload_chunk.data(), size)) {
+            close_upload();
+            return false;
+        }
+        upload_sent += size;
+        if (upload_sent == turn_queue.active().user_bytes) {
+            close_upload();
+            return network.SendText(AgentVoiceBuildTurnEnd(turn_queue.active().paths.turn_id));
+        }
+        return true;
+    };
+
+    auto process_requests = [&]() {
         sync_voice_control();
         RecorderRequest request;
         while (TakeRequest(&request)) {
             RecorderControlAction action =
                 ApplyRequest(request, &control, &codec, &exit_requested, &ui_context);
-            if (action == RecorderControlAction::kOpenPlaybackMenu &&
-                open_menu != nullptr) {
-                *open_menu = true;
-            } else if (action == RecorderControlAction::kStartPlayback &&
-                       play_path != nullptr) {
-                *play_path = request.path;
+            if (action == RecorderControlAction::kStartRecording ||
+                action == RecorderControlAction::kStopRecording) {
+                // Finalize this gesture before consuming a following press.
+                break;
             }
         }
     };
 
     auto schedule_reconnect = [&](AgentVoiceEvent event) {
+        close_upload();
         abort_reply();
         AgentVoiceReduce(&voice_state, event);
         sync_voice_control();
@@ -814,7 +654,7 @@ void RunRecorderApp() {
             RenderAssistant(&ui_context);
         }
         if (wifi_connected && reconnect_at_ms != 0 &&
-            now_ms >= reconnect_at_ms) {
+            now_ms >= reconnect_at_ms && control.mode != RecorderControlMode::kRecording) {
             reconnect_at_ms = 0;
             AgentVoiceReduce(&voice_state, AgentVoiceEvent::kWifiConnected);
             sync_voice_control();
@@ -832,7 +672,9 @@ void RunRecorderApp() {
         }
 
         RecorderNetworkEvent network_event;
-        while (network.Poll(&network_event)) {
+        // At most one event per iteration keeps capture and touch responsive.
+        for (int event_budget = 0; event_budget < 1 && network.Poll(&network_event);
+             ++event_budget) {
             if (network_event.type == RecorderNetworkEventType::kWifiConnected) {
                 wifi_connected = true;
                 ESP_LOGI(TAG, "Agent voice Wi-Fi connected");
@@ -844,9 +686,8 @@ void RunRecorderApp() {
                     ui_notice = RecorderAssistantNotice::kNone;
                 }
                 RenderAssistant(&ui_context);
-                if (!network.ConnectSocket()) {
-                    schedule_reconnect(AgentVoiceEvent::kFailure);
-                }
+                // TLS connection setup is deferred until the microphone is idle.
+                reconnect_at_ms = RecorderMonotonicMs() + 1;
                 continue;
             }
             if (network_event.type == RecorderNetworkEventType::kWifiDisconnected) {
@@ -880,7 +721,7 @@ void RunRecorderApp() {
                 continue;
             }
             if (network_event.type == RecorderNetworkEventType::kBinary) {
-                if (!has_active_turn || !reply_digest_active ||
+                if (turn_queue.empty() || !reply_digest_active ||
                     voice_state.phase != AgentVoicePhase::kReceiving ||
                     network_event.data.empty()) {
                     fail_connection("unexpected reply audio");
@@ -899,7 +740,7 @@ void RunRecorderApp() {
                 }
                 reply_received_bytes += network_event.data.size();
                 const std::string acknowledgement = AgentVoiceBuildReplyChunkSaved(
-                    active_turn.paths.turn_id, reply_received_bytes);
+                    turn_queue.active().paths.turn_id, reply_received_bytes);
                 if (acknowledgement.empty() || !network.SendText(acknowledgement)) {
                     fail_connection("reply chunk acknowledgement failed");
                 }
@@ -910,8 +751,8 @@ void RunRecorderApp() {
             }
 
             AgentVoiceControl frame;
-            const std::string expected_turn = has_active_turn
-                ? active_turn.paths.turn_id : std::string();
+            const std::string expected_turn = !turn_queue.empty()
+                ? turn_queue.active().paths.turn_id : std::string();
             if (!AgentVoiceParseControl(
                     network_event.text(), expected_turn, &frame)) {
                 fail_connection("invalid server control frame");
@@ -945,14 +786,14 @@ void RunRecorderApp() {
                     break;
                 }
                 case AgentVoiceControlType::kTurnReady:
-                    if (!upload_active_turn(frame.chunk_bytes)) {
+                    if (!begin_upload(frame.chunk_bytes)) {
                         fail_connection("WAV upload failed");
                     }
                     break;
                 case AgentVoiceControlType::kTurnAccepted: {
                     RecorderDisplayPause();
                     const bool updated = turn_store.UpdateState(
-                        active_turn.paths, AgentTurnStatus::kProcessing);
+                        turn_queue.active().paths, AgentTurnStatus::kProcessing);
                     RecorderDisplayResume();
                     if (!updated) {
                         fail_connection("turn state could not be stored");
@@ -962,14 +803,14 @@ void RunRecorderApp() {
                     sync_voice_control();
                     RenderAssistant(&ui_context);
                     ESP_LOGI(TAG, "Agent accepted turn: %s",
-                             active_turn.paths.turn_id.c_str());
+                             turn_queue.active().paths.turn_id.c_str());
                     break;
                 }
                 case AgentVoiceControlType::kReplyStart: {
                     abort_reply();
                     RecorderDisplayPause();
                     const bool began = turn_store.BeginReply(
-                        active_turn.paths, frame.bytes, frame.sha256);
+                        turn_queue.active().paths, frame.bytes, frame.sha256);
                     RecorderDisplayResume();
                     if (!began) {
                         fail_connection("reply file could not be created");
@@ -1014,21 +855,19 @@ void RunRecorderApp() {
                         fail_connection("reply integrity check failed");
                         break;
                     }
-                    if (!network.SendText(AgentVoiceBuildReplySaved(
-                            active_turn.paths.turn_id))) {
-                        fail_connection("reply saved acknowledgement failed");
-                        break;
-                    }
+                    const std::string completed_id = turn_queue.active().paths.turn_id;
+                    const std::string completed_path = turn_queue.active().paths.assistant_wav;
+                    automatic_play_paths.push_back(completed_path);
+                    turn_queue.FinishActive();
                     AgentVoiceReduce(&voice_state, AgentVoiceEvent::kReplyStored);
-                    sync_voice_control();
-                    if (RecorderControlReduce(
-                            &control, RecorderControlEvent::kAgentReplyReady) ==
-                        RecorderControlAction::kStartAgentReplyPlayback) {
-                        automatic_play_path = active_turn.paths.assistant_wav;
+                    sync_pending();
+                    // The verified reply is already durable. ACK failure must not
+                    // enqueue/replay the completed turn or lose its automatic audio.
+                    if (!network.SendText(AgentVoiceBuildReplySaved(completed_id))) {
+                        fail_connection("reply saved acknowledgement failed");
                     }
                     RenderAssistant(&ui_context);
-                    ESP_LOGI(TAG, "Agent reply stored: %s",
-                             active_turn.paths.assistant_wav.c_str());
+                    ESP_LOGI(TAG, "Agent reply stored: %s", completed_path.c_str());
                     break;
                 }
                 case AgentVoiceControlType::kError: {
@@ -1038,9 +877,9 @@ void RunRecorderApp() {
                     }
                     abort_reply();
                     RecorderDisplayPause();
-                    const bool marked_failed = has_active_turn &&
+                    const bool marked_failed = !turn_queue.empty() &&
                         turn_store.MarkFailed(
-                            active_turn.paths,
+                            turn_queue.active().paths,
                             frame.error_code.empty()
                                 ? "server_rejected_turn"
                                 : frame.error_code);
@@ -1054,12 +893,13 @@ void RunRecorderApp() {
                     AgentVoiceReduce(
                         &voice_state, AgentVoiceEvent::kTurnRejected);
                     sync_voice_control();
-                    load_oldest_pending();
+                    turn_queue.FinishActive();
+                    sync_pending();
                     ui_notice = frame.error_code == "speech_not_recognized"
                         ? RecorderAssistantNotice::kSpeechNotRecognized
                         : RecorderAssistantNotice::kSaveFailure;
                     ui_notice_until_ms = RecorderMonotonicMs() + 2500;
-                    if (has_active_turn && network.IsSocketConnected()) {
+                    if (!turn_queue.empty() && network.IsSocketConnected()) {
                         const AgentVoiceAction action = AgentVoiceReduce(
                             &voice_state, AgentVoiceEvent::kTurnQueued);
                         sync_voice_control();
@@ -1079,14 +919,18 @@ void RunRecorderApp() {
             }
         }
 
-        bool open_menu = false;
+        RecorderDisplayPollDarkTouch();
         std::string play_path;
-        process_requests(&open_menu, &play_path);
+        process_requests();
 
         if (exit_requested) {
             // 退出前若正在录音，先把当前文件收尾保存，避免丢数据
+            close_upload();
             network.Stop();
+            codec.EnableOutput(false);
+            codec.EnableInput(false);
             RecorderDisplayPause();
+            playback.Close();
             abort_reply();
             if (f != nullptr) {
                 const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
@@ -1115,54 +959,74 @@ void RunRecorderApp() {
             AppModeWriteAndReboot(AppMode::kSelector);  // 不返回
         }
 
-        if (open_menu && control.mode == RecorderControlMode::kIdle && f == nullptr) {
-            RecorderDisplayPause();
-            ShowPlaybackMenu();
-            RecorderDisplayResume();
+        if (control.mode == RecorderControlMode::kRecording && speaker_enabled) {
+            codec.EnableOutput(false);
+            speaker_enabled = false;
         }
-
-        bool playing_agent_reply = false;
-        if (play_path.empty() && !automatic_play_path.empty()) {
-            play_path = std::move(automatic_play_path);
-            automatic_play_path.clear();
-            playing_agent_reply = true;
-            AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackStarted);
-            sync_voice_control();
-            RenderAssistant(&ui_context);
-            ESP_LOGI(TAG, "Agent reply playback start: %s", play_path.c_str());
-        }
-        if (!play_path.empty() &&
-            control.mode == RecorderControlMode::kPlaying && f == nullptr) {
-            RecorderDisplayPause();
-            const PlaybackResult result =
-                PlayWavFile(codec, play_path.c_str(), &control, &exit_requested,
-                            &ui_context);
-            RecorderControlReduce(&control, RecorderControlEvent::kPlaybackFinished);
-            if (playing_agent_reply) {
-                AgentVoiceReduce(&voice_state, AgentVoiceEvent::kPlaybackFinished);
-                load_oldest_pending();
-                if (has_active_turn && network.IsSocketConnected()) {
-                    const AgentVoiceAction action = AgentVoiceReduce(
-                        &voice_state, AgentVoiceEvent::kTurnQueued);
-                    sync_voice_control();
-                    if (action == AgentVoiceAction::kSendQueuedTurn &&
-                        !send_turn_start()) {
-                        fail_connection("next queued turn could not start");
-                    }
-                }
+        // Playback advances one small block per main-loop pass. A hold suspends
+        // output but keeps the file cursor and resampler for exact continuation.
+        if (control.mode == RecorderControlMode::kIdle && f == nullptr) {
+            if (playback.is_open()) {
+                control.mode = RecorderControlMode::kPlaying;
+                RenderAssistant(&ui_context);
+            } else if (!automatic_play_paths.empty()) {
+                play_path = std::move(automatic_play_paths.front());
+                automatic_play_paths.pop_front();
+                RecorderControlReduce(&control, RecorderControlEvent::kAgentReplyReady);
+                ESP_LOGI(TAG, "Agent reply playback start: %s", play_path.c_str());
             }
-            if (!exit_requested && result == PlaybackResult::kFailed) {
+        }
+        if (!play_path.empty() && control.mode == RecorderControlMode::kPlaying && f == nullptr) {
+            RecorderDisplayPause();
+            const bool opened = playback.Open(play_path, codec.output_sample_rate(),
+                                               codec.output_channels());
+            RecorderDisplayResume();
+            playback_rate.reset(opened ? new RecorderRateConverter(
+                playback.sample_rate(), codec.output_sample_rate()) : nullptr);
+            if (!opened || !playback_rate->valid()) {
+                RecorderDisplayPause();
+                playback.Close();
+                RecorderDisplayResume();
+                control.mode = RecorderControlMode::kIdle;
                 ui_notice = RecorderAssistantNotice::kPlaybackFailure;
                 ui_notice_until_ms = RecorderMonotonicMs() + 2500;
             }
             RenderAssistant(&ui_context);
+        }
+        if (playback.is_open() && control.mode == RecorderControlMode::kPlaying && f == nullptr) {
+            if (!speaker_enabled) {
+                codec.EnableOutput(true);
+                speaker_enabled = true;
+            }
+            std::vector<int16_t> samples, converted;
+            RecorderDisplayPause();
+            bool ok = playback.Read(&samples);
             RecorderDisplayResume();
-            continue;
+            ok = ok && playback_rate->Process(samples, &converted);
+            if (ok && !converted.empty()) codec.OutputData(converted);
+            if (!ok || playback.done()) {
+                if (ok) {
+                    converted.clear();
+                    ok = playback_rate->Flush(&converted);
+                    if (ok && !converted.empty()) codec.OutputData(converted);
+                }
+                RecorderDisplayPause();
+                playback.Close();
+                RecorderDisplayResume();
+                playback_rate.reset();
+                codec.EnableOutput(false);
+                speaker_enabled = false;
+                RecorderControlReduce(&control, RecorderControlEvent::kPlaybackFinished);
+                if (!ok) {
+                    ui_notice = RecorderAssistantNotice::kPlaybackFailure;
+                    ui_notice_until_ms = RecorderMonotonicMs() + 2500;
+                }
+                RenderAssistant(&ui_context);
+            }
         }
 
         if (control.mode == RecorderControlMode::kRecording && f == nullptr) {
             // 开始录音：新建文件 + 占位头
-            RecorderDisplayHideFileMenu();
             assistant_elapsed_seconds = 0;
             ui_notice = RecorderAssistantNotice::kNone;
             ui_notice_until_ms = 0;
@@ -1210,6 +1074,7 @@ void RunRecorderApp() {
             data_bytes = 0;
             recording_failed = false;
             last_disp_ms = 0;
+            codec.EnableInput(true);
             ESP_LOGI(TAG, "开始录音 -> %s", cur_path.c_str());
             RecorderDisplayResume();
         }
@@ -1252,7 +1117,7 @@ void RunRecorderApp() {
                 }
                 RecorderDisplayResume();
             }
-            process_requests(nullptr, nullptr);
+            process_requests();
             if (exit_requested) {
                 continue;
             }
@@ -1260,6 +1125,7 @@ void RunRecorderApp() {
 
         if (control.mode != RecorderControlMode::kRecording && f != nullptr) {
             // 停止录音：回填头 + 关闭
+            codec.EnableInput(false);
             RecorderDisplayPause();
             const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
                                   !recording_failed;
@@ -1292,12 +1158,14 @@ void RunRecorderApp() {
                 RecorderDisplayResume();
                 continue;
             }
-            ESP_LOGI(TAG, "已保存 %s (%u 秒, %llu 字节)",
+            ESP_LOGI(TAG, "已保存 %s (%u 秒, %u 字节)",
                      cur_path.c_str(),
                      static_cast<unsigned>(secs),
-                     static_cast<unsigned long long>(wav_bytes));
+                     static_cast<unsigned>(wav_bytes));
             ESP_LOGI(TAG, "Agent user WAV stored: %s", cur_path.c_str());
-            load_oldest_pending();
+            turn_queue.Push({recording_paths, AgentTurnStatus::kRecorded,
+                             wav_bytes, wav_sha256, recording_created_at_ms});
+            sync_pending();
             const AgentVoiceAction action = AgentVoiceReduce(
                 &voice_state, AgentVoiceEvent::kTurnQueued);
             sync_voice_control();
@@ -1309,8 +1177,16 @@ void RunRecorderApp() {
             RecorderDisplayResume();
         }
 
+        if (voice_state.phase == AgentVoicePhase::kOnline &&
+            !turn_queue.empty() && network.IsSocketConnected()) {
+            AgentVoiceReduce(&voice_state, AgentVoiceEvent::kTurnQueued);
+            sync_voice_control();
+            if (!send_turn_start()) fail_connection("next queued turn could not start");
+        }
+        if (!upload_one_chunk()) fail_connection("WAV upload failed");
+
         if (control.mode == RecorderControlMode::kIdle) {
-            vTaskDelay(pdMS_TO_TICKS(50));  // 空闲时让出 CPU
+            vTaskDelay(pdMS_TO_TICKS(upload_file != nullptr ? 1 : 10));  // 空闲时让出 CPU
         }
     }
 }

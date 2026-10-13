@@ -116,6 +116,18 @@ int main() {
     assert(pending[0].paths.turn_id == "turn-oldest");
     assert(pending[1].paths.turn_id == "turn-2");
 
+    // Before authenticated clock sync, recordings use a real offline directory.
+    auto offline = store.Create("unsynced", "turn-u-offline");
+    assert(offline.valid());
+    WriteFile(offline.user_wav, user_wav);
+    assert(store.MarkRecorded(offline, user_wav.size(), user_hash, 123));
+    bool recovered_offline = false;
+    for (const auto& turn : store.ListPending()) {
+        if (turn.paths.date == "unsynced") recovered_offline = true;
+    }
+    assert(recovered_offline);
+    assert(!store.Create("notadate", "unsafe").valid());
+
     AgentTurnPaths unsafe = store.Create("20260712", "../escape");
     assert(!unsafe.valid());
     return 0;
