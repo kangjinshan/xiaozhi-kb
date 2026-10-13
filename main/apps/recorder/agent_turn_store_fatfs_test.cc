@@ -66,7 +66,7 @@ int main() {
     AgentTurnStore store(root);
     const AgentTurnPaths paths = store.Create("20260712", "turn-fatfs");
     assert(paths.valid());
-    WriteFile(paths.user_wav, user_wav);
+    WriteFile(paths.user_audio, user_wav);
     assert(store.MarkRecorded(
         paths, user_wav.size(), user_hash, 1783821600000ULL));
 
@@ -93,7 +93,7 @@ int main() {
     const AgentTurnPaths interrupted =
         store.Create("20260712", "turn-interrupted-swap");
     assert(interrupted.valid());
-    WriteFile(interrupted.user_wav, user_wav);
+    WriteFile(interrupted.user_audio, user_wav);
     assert(store.MarkRecorded(
         interrupted, user_wav.size(), user_hash, 1783821660000ULL));
     const std::string manifest_backup = interrupted.manifest + ".bak";

@@ -4,6 +4,7 @@
 #include "esp_lcd_sh8601.h"
 #include "recorder_control_state.h"
 #include "recorder_hold_input.h"
+#include "recorder_display_guard.h"
 #include "recorder_display_area.h"
 
 #include <driver/spi_master.h>
@@ -458,7 +459,7 @@ void RecorderDisplayPause() {
 }
 
 void RecorderDisplayResume() {
-    if (!s_display_initialized || s_pause_depth <= 0) {
+    if (!s_display_initialized || !RecorderDisplayCanResume(s_screen_on, s_pause_depth)) {
         return;
     }
     --s_pause_depth;

@@ -144,14 +144,17 @@ bool AgentVoiceSha256Text(const std::string& sha256) {
 
 std::string AgentVoiceBuildTurnStart(const std::string& turn_id,
                                      uint64_t bytes,
-                                     const std::string& sha256) {
-    if (!AgentVoiceSafeTurnId(turn_id) || bytes < 44 ||
+                                     const std::string& sha256,
+                                     const std::string& audio_format) {
+    const bool amr = audio_format == "amr-nb";
+    if ((!amr && audio_format != "wav-pcm-s16le") ||
+        !AgentVoiceSafeTurnId(turn_id) || bytes < (amr ? 7u : 44u) ||
         bytes > kAgentVoiceMaxBytes || !AgentVoiceSha256Text(sha256)) {
         return {};
     }
     std::ostringstream json;
     json << "{\"type\":\"turn_start\",\"turn_id\":\"" << turn_id
-         << "\",\"audio_format\":\"wav-pcm-s16le\",\"sample_rate\":16000"
+         << "\",\"audio_format\":\"" << audio_format << "\",\"sample_rate\":" << (amr ? 8000 : 16000)
          << ",\"channels\":1,\"bytes\":" << bytes
          << ",\"sha256\":\"" << sha256 << "\"}";
     return json.str();

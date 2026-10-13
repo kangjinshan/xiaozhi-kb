@@ -19,6 +19,7 @@
 #include "recorder_turn_queue.h"
 #include "recorder_hold_input.h"
 #include "recorder_reply_download.h"
+#include "recorder_amr_encoder.h"
 #include "keyboard_pmic_power_key.h"
 
 #include <driver/i2c_master.h>
@@ -154,52 +155,18 @@ esp_err_t InitI2cAndPmic() {
     return ESP_OK;
 }
 
-// 写 44 字节 WAV 头。data_bytes=0 时为占位（录音结束再回填）。
-void WriteWavHeader(FILE* f, uint32_t sample_rate, uint16_t channels,
-                    uint16_t bits, uint32_t data_bytes) {
-    uint32_t byte_rate = sample_rate * channels * (bits / 8);
-    uint16_t block_align = channels * (bits / 8);
-    uint32_t riff_size = 36 + data_bytes;
-    fseek(f, 0, SEEK_SET);
-    fwrite("RIFF", 1, 4, f);
-    fwrite(&riff_size, 4, 1, f);
-    fwrite("WAVE", 1, 4, f);
-    fwrite("fmt ", 1, 4, f);
-    uint32_t fmt_size = 16; fwrite(&fmt_size, 4, 1, f);
-    uint16_t audio_fmt = 1;  fwrite(&audio_fmt, 2, 1, f);   // PCM
-    fwrite(&channels, 2, 1, f);
-    fwrite(&sample_rate, 4, 1, f);
-    fwrite(&byte_rate, 4, 1, f);
-    fwrite(&block_align, 2, 1, f);
-    fwrite(&bits, 2, 1, f);
-    fwrite("data", 1, 4, f);
-    fwrite(&data_bytes, 4, 1, f);
+bool AppendEncoded(FILE* file, const std::vector<uint8_t>& bytes) {
+    return file && (bytes.empty() || fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size());
 }
 
-bool AppendPcm(FILE* file, const std::vector<int16_t>& samples, uint32_t* data_bytes) {
-    if (file == nullptr || data_bytes == nullptr) {
-        return false;
-    }
-    const size_t bytes = samples.size() * sizeof(int16_t);
-    if (bytes == 0) {
-        return true;
-    }
-    if (fwrite(samples.data(), 1, bytes, file) != bytes) {
-        return false;
-    }
-    *data_bytes += static_cast<uint32_t>(bytes);
-    return true;
-}
-
-bool FinishRecording(FILE* file,
-                     RecorderNoiseReducer* reducer,
-                     uint32_t* data_bytes) {
+bool FinishRecording(FILE* file, RecorderNoiseReducer* reducer,
+                     RecorderAmrEncoder* encoder, uint32_t* pcm_bytes) {
     std::vector<int16_t> tail;
-    if (!reducer->Flush(&tail) || !AppendPcm(file, tail, data_bytes)) {
-        return false;
-    }
-    WriteWavHeader(file, reducer->output_sample_rate(), 1, 16, *data_bytes);
-    return std::fflush(file) == 0 && fsync(fileno(file)) == 0;
+    std::vector<uint8_t> encoded;
+    if (!reducer->Flush(&tail) || !encoder->Process(tail, &encoded) ||
+        !encoder->Flush(&encoded) || !AppendEncoded(file, encoded)) return false;
+    *pcm_bytes += tail.size() * sizeof(int16_t);
+    return *pcm_bytes > 0 && std::fflush(file) == 0 && fsync(fileno(file)) == 0;
 }
 
 uint64_t RecorderMonotonicMs() {
@@ -403,7 +370,6 @@ RecorderControlAction ApplyRequest(const RecorderRequest& request,
 }
 
 void FlushDisplayThenPause(uint32_t ms = 90) {
-    RecorderDisplayResume();
     vTaskDelay(pdMS_TO_TICKS(ms));
     RecorderDisplayPause();
 }
@@ -459,6 +425,13 @@ void RunRecorderApp() {
              sample_rate,
              noise_reducer.output_sample_rate(),
              noise_reducer.noise_reduction_enabled() ? "enabled" : "unavailable");
+
+    RecorderAmrEncoder amr_encoder;
+    std::vector<uint8_t> encoder_probe;
+    const bool encoder_ready = amr_encoder.Reset() &&
+        amr_encoder.Process(std::vector<int16_t>(320, 0), &encoder_probe) &&
+        amr_encoder.Flush(&encoder_probe) && encoder_probe.size() == 32 && amr_encoder.Reset();
+    ESP_LOGI(TAG, "AMR-NB encoder self-test: %s", encoder_ready ? "ok" : "failed");
 
     AgentVoiceState voice_state;
     RecorderTurnQueue turn_queue;
@@ -571,7 +544,7 @@ void RunRecorderApp() {
         const std::string frame = AgentVoiceBuildTurnStart(
             turn_queue.active().paths.turn_id,
             turn_queue.active().user_bytes,
-            turn_queue.active().user_sha256);
+            turn_queue.active().user_sha256, turn_queue.active().paths.audio_format);
         if (frame.empty() || !network.SendText(frame)) {
             return false;
         }
@@ -592,7 +565,7 @@ void RunRecorderApp() {
         if (turn_queue.empty() || upload_file != nullptr || chunk_bytes == 0 ||
             chunk_bytes > kAgentVoiceMaxChunkBytes) return false;
         RecorderDisplayPause();
-        upload_file = fopen(turn_queue.active().paths.user_wav.c_str(), "rb");
+        upload_file = fopen(turn_queue.active().paths.user_audio.c_str(), "rb");
         RecorderDisplayResume();
         upload_sent = 0;
         upload_chunk_bytes = chunk_bytes;
@@ -958,7 +931,7 @@ void RunRecorderApp() {
             playback.Close();
             abort_reply();
             if (f != nullptr) {
-                const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
+                const bool saved_ok = FinishRecording(f, &noise_reducer, &amr_encoder, &data_bytes) &&
                                       !recording_failed;
                 if (!saved_ok) {
                     ESP_LOGE(TAG, "退出时录音保存失败: %s", cur_path.c_str());
@@ -1062,7 +1035,7 @@ void RunRecorderApp() {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
-            if (!noise_reducer.valid() || !noise_reducer.Reset()) {
+            if (!noise_reducer.valid() || !noise_reducer.Reset() || !amr_encoder.Reset()) {
                 ESP_LOGE(TAG, "录音 DSP 初始化/复位失败");
                 control.mode = RecorderControlMode::kIdle;
                 ui_notice = RecorderAssistantNotice::kDspFailure;
@@ -1082,8 +1055,8 @@ void RunRecorderApp() {
                 RecorderMonotonicMs(), esp_random());
             recording_created_at_ms = turn_stamp.created_at_ms;
             recording_paths = turn_store.Create(
-                turn_stamp.date, turn_stamp.turn_id);
-            cur_path = recording_paths.user_wav;
+                turn_stamp.date, turn_stamp.turn_id, "amr-nb");
+            cur_path = recording_paths.user_audio;
             f = recording_paths.valid() ? fopen(cur_path.c_str(), "wb") : nullptr;
             if (f == nullptr) {
                 ESP_LOGE(TAG, "无法创建录音文件 %s", cur_path.c_str());
@@ -1095,9 +1068,9 @@ void RunRecorderApp() {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 continue;
             }
-            WriteWavHeader(f, noise_reducer.output_sample_rate(), 1, 16, 0);
+            const bool header_ok = fwrite("#!AMR\n", 1, 6, f) == 6;
             data_bytes = 0;
-            recording_failed = false;
+            recording_failed = !header_ok;
             last_disp_ms = 0;
             codec.EnableInput(true);
             ESP_LOGI(TAG, "开始录音 -> %s", cur_path.c_str());
@@ -1116,9 +1089,12 @@ void RunRecorderApp() {
                     reached_voice_limit = allowed_samples < processed.size();
                     processed.resize(allowed_samples);
                 }
+                std::vector<uint8_t> encoded;
+                if (block_ok) block_ok = amr_encoder.Process(processed, &encoded);
                 RecorderDisplayPause();
                 if (block_ok) {
-                    block_ok = AppendPcm(f, processed, &data_bytes);
+                    block_ok = AppendEncoded(f, encoded);
+                    data_bytes += processed.size() * sizeof(int16_t);
                 }
                 if (!block_ok) {
                     ESP_LOGE(TAG, "录音 DSP/写入失败: %s", cur_path.c_str());
@@ -1152,7 +1128,7 @@ void RunRecorderApp() {
             // 停止录音：回填头 + 关闭
             codec.EnableInput(false);
             RecorderDisplayPause();
-            const bool saved_ok = FinishRecording(f, &noise_reducer, &data_bytes) &&
+            const bool saved_ok = FinishRecording(f, &noise_reducer, &amr_encoder, &data_bytes) &&
                                   !recording_failed;
             fclose(f);
             f = nullptr;
@@ -1187,7 +1163,7 @@ void RunRecorderApp() {
                      cur_path.c_str(),
                      static_cast<unsigned>(secs),
                      static_cast<unsigned>(wav_bytes));
-            ESP_LOGI(TAG, "Agent user WAV stored: %s", cur_path.c_str());
+            ESP_LOGI(TAG, "Agent user AMR stored: %s", cur_path.c_str());
             turn_queue.Push({recording_paths, AgentTurnStatus::kRecorded,
                              wav_bytes, wav_sha256, recording_created_at_ms});
             sync_pending();

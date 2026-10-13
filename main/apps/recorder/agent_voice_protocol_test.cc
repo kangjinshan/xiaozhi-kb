@@ -16,6 +16,9 @@ int main() {
     assert(turn_start.find(hash) != std::string::npos);
     assert(AgentVoiceBuildTurnStart("../escape", 1024, hash).empty());
     assert(AgentVoiceBuildTurnStart("turn-1", 4194305, hash).empty());
+    const auto amr_start = AgentVoiceBuildTurnStart("turn-amr", 38, hash, "amr-nb");
+    assert(amr_start.find("\"audio_format\":\"amr-nb\"") != std::string::npos);
+    assert(amr_start.find("\"sample_rate\":8000") != std::string::npos);
 
     AgentVoiceControl control;
     assert(AgentVoiceParseControl(

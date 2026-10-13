@@ -148,3 +148,14 @@
 12 KiB 下载任务只接收网络数据到 8 KiB stream buffer；主任务非阻塞读取，独占 SD/codec。
 AMR 使用 assistant.amr 与如实的 manifest 路径，SHA-256 和完整长度必须通过；WAV 8/16/24 kHz
 继续兼容。编解码帧长规则与目标芯片 AMR 静音帧自检必须保持，不得在网络任务操作 SD 或播放。
+
+## 2.2.9 实时 AMR 录音与暗屏保护
+
+新录音为 user.amr：24→16 kHz NS 后实时重采样至 8 kHz，使用 Espressif AMR-NB 12.2 kbps
+按 20 ms 帧编码，松手只 flush 与保存摘要，不做整段离线转码。逻辑 PCM 字节数继续用于
+原时长上限和 UI 时间；manifest 的 user_path 和格式区分 AMR/WAV，旧 WAV 队列仍可上传。
+encoder 流式分帧/尾帧补齐/重置测试和启动目标编码器自检必须通过。
+
+暗屏固定持有一层显示 pause，RecorderDisplayCanResume 必须阻止 SD/录音代码释放这一层。
+FlushDisplayThenPause 只能新增自己的 pause，不能预先 Resume；否则黑屏时会启动 LVGL，
+与手动触摸/SD 争用并可能引发重启、亮屏和重新联网。息屏没有网络停止操作。

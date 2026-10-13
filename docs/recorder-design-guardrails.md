@@ -237,6 +237,16 @@ c++ -std=c++17 -Wall -Wextra -Werror -DRECORDER_REPLY_DOWNLOAD_HOST_TEST \
   main/apps/recorder/recorder_reply_download.cc \
   -o /tmp/recorder_reply_download_test && /tmp/recorder_reply_download_test
 
+c++ -std=c++17 -Wall -Wextra -Werror \
+  main/apps/recorder/recorder_amr_encoder_test.cc \
+  main/apps/recorder/recorder_amr_encoder.cc \
+  main/apps/recorder/recorder_rate_converter.cc \
+  -o /tmp/recorder_amr_encoder_test && /tmp/recorder_amr_encoder_test
+
+c++ -std=c++17 -Wall -Wextra -Werror \
+  main/apps/recorder/recorder_display_guard_test.cc \
+  -o /tmp/recorder_display_guard_test && /tmp/recorder_display_guard_test
+
 source ~/esp/esp-idf/export.sh
 idf.py build
 nm build/esp-idf/main/libmain.a | rg ' U ns_(create|pro_create)$'
@@ -304,3 +314,15 @@ reserved frame types, invalid padding and truncation. Use the target SDK's AMR-N
 frame decoder, retain it across recording interruptions, and resample its 160-sample
 8 kHz output to the existing 24 kHz codec. A synthetic silence-frame boot self-test
 checks the actual target decoder without emitting audio.
+
+## Dark recording and AMR uplink (2.2.9)
+
+The panel's persistent dark pause is a floor: SD operations may acquire/release their
+own nested pause, but only explicit screen-on can release the last pause. Recording
+preparation must never call Resume before acquiring its own pause. This fixes accidental
+LVGL revival while the dark-touch main-task reader is active.
+
+Encode denoised 16 kHz PCM incrementally to AMR-NB at 8 kHz / 12.2 kbps. Store user.amr and
+its exact compressed checksum; keep logical PCM counts for duration/UI. Legacy WAV manifests
+remain valid and explicitly select their upload format. Run encoder framing/reset/failure,
+manifest recovery, protocol, and dark-pause guard tests plus the target codec self-tests.

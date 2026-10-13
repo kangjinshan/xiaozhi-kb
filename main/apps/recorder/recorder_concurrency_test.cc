@@ -37,7 +37,7 @@ int main() {
     for (size_t i = 0; i < audio.size(); ++i) audio[i] = i;
     const std::string hash(64, 'a');
     const auto a = store.Create("20261013", "a");
-    WriteWav(a.user_wav, audio);
+    WriteWav(a.user_audio, audio);
     assert(store.MarkRecorded(a, audio.size() * 2 + 44, hash, 1));
     for (const auto& turn : store.ListPending()) queue.Push(turn);
     assert(store.BeginReply(a, 6, hash));
@@ -48,7 +48,7 @@ int main() {
     // change A's ownership or invoke startup recovery on its live .part file.
     for (const char* name : {"b", "c"}) {
         auto paths = store.Create("20261013", name);
-        WriteWav(paths.user_wav, audio);
+        WriteWav(paths.user_audio, audio);
         assert(store.MarkRecorded(paths, audio.size() * 2 + 44, hash, 2));
         queue.Push({paths, AgentTurnStatus::kRecorded, audio.size() * 2 + 44, hash, 2});
         assert(queue.active().paths.turn_id == "a");
@@ -66,13 +66,13 @@ int main() {
     assert(store.ListPending().size() == 1);  // Restart keeps C, not A or B.
 
     RecorderPlaybackStream playback;
-    assert(playback.Open(a.user_wav, 24000, 1));
+    assert(playback.Open(a.user_audio, 24000, 1));
     std::vector<int16_t> received, block;
     assert(playback.Read(&block) && block.size() <= 1024);
     received.insert(received.end(), block.begin(), block.end());
     // Capture a new turn while the open playback stream is suspended.
     auto d = store.Create("20261013", "d");
-    WriteWav(d.user_wav, audio);
+    WriteWav(d.user_audio, audio);
     assert(store.MarkRecorded(d, audio.size() * 2 + 44, hash, 3));
     while (!playback.done()) {
         assert(playback.Read(&block) && block.size() <= 1024);
@@ -81,7 +81,7 @@ int main() {
     assert(received == audio);  // Resume has no skipped/repeated samples.
     playback.Close();
     assert(!playback.Open(a.assistant_wav + ".part", 24000, 1));
-    assert(truncate(a.user_wav.c_str(), 100) == 0);
-    assert(!playback.Open(a.user_wav, 24000, 1));
+    assert(truncate(a.user_audio.c_str(), 100) == 0);
+    assert(!playback.Open(a.user_audio, 24000, 1));
     puts("recorder_concurrency_test passed");
 }

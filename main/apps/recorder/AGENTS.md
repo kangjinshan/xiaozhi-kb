@@ -23,3 +23,14 @@ SPI2/栈/哈希错误。网络与硬件的真实验收不得用纯 reducer 测�
 assistant_path 必须如实记录格式；旧 WAV 不删除并继续兼容。AMR 文件头固定 #!AMR\n，
 拒绝保留帧类型/坏填充/截断帧，解码使用已有 Espressif AMR-NB 库，输出再重采样到 24 kHz。
 启动时用一个合成静音帧验证目标解码器，不播放测试音；USB 必须看到 self-test: ok。
+
+## 2.2.9 实时 AMR 录音与暗屏保护
+
+新录音为 user.amr：24→16 kHz NS 后实时重采样至 8 kHz，使用 Espressif AMR-NB 12.2 kbps
+按 20 ms 帧编码，松手只 flush 与保存摘要，不做整段离线转码。逻辑 PCM 字节数继续用于
+原时长上限和 UI 时间；manifest 的 user_path 和格式区分 AMR/WAV，旧 WAV 队列仍可上传。
+encoder 流式分帧/尾帧补齐/重置测试和启动目标编码器自检必须通过。
+
+暗屏固定持有一层显示 pause，RecorderDisplayCanResume 必须阻止 SD/录音代码释放这一层。
+FlushDisplayThenPause 只能新增自己的 pause，不能预先 Resume；否则黑屏时会启动 LVGL，
+与手动触摸/SD 争用并可能引发重启、亮屏和重新联网。息屏没有网络停止操作。

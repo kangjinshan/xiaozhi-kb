@@ -44,7 +44,7 @@ int main() {
     AgentTurnStore store(root);
     AgentTurnPaths paths = store.Create("20260712", "turn-1");
     assert(paths.valid());
-    WriteFile(paths.user_wav, user_wav);
+    WriteFile(paths.user_audio, user_wav);
     assert(store.MarkRecorded(paths, user_wav.size(), user_hash, 1783821600000ULL));
 
     auto pending = store.ListPending();
@@ -76,7 +76,7 @@ int main() {
 
     AgentTurnPaths failed = store.Create("20260712", "turn-failed");
     assert(failed.valid());
-    WriteFile(failed.user_wav, user_wav);
+    WriteFile(failed.user_audio, user_wav);
     assert(store.MarkRecorded(
         failed, user_wav.size(), user_hash, 1783821630000ULL));
     assert(store.MarkFailed(failed, "speech_not_recognized"));
@@ -87,7 +87,7 @@ int main() {
 
     AgentTurnPaths interrupted = store.Create("20260712", "turn-2");
     assert(interrupted.valid());
-    WriteFile(interrupted.user_wav, user_wav);
+    WriteFile(interrupted.user_audio, user_wav);
     assert(store.MarkRecorded(interrupted, user_wav.size(), user_hash, 1783821660000ULL));
     assert(store.BeginReply(interrupted, reply_wav.size(), reply_hash));
     assert(store.AppendReply(reply_wav.data(), 3));
@@ -99,7 +99,7 @@ int main() {
     pending = restarted.ListPending();
     assert(pending.size() == 1);
     assert(pending[0].paths.turn_id == "turn-2");
-    assert(access(pending[0].paths.user_wav.c_str(), F_OK) == 0);
+    assert(access(pending[0].paths.user_audio.c_str(), F_OK) == 0);
     assert(access((pending[0].paths.assistant_wav + ".part").c_str(), F_OK) != 0);
 
     AgentTurnPaths missing_manifest = store.Create("20260712", "turn-3");
@@ -109,7 +109,7 @@ int main() {
 
     AgentTurnPaths older = store.Create("20260711", "turn-oldest");
     assert(older.valid());
-    WriteFile(older.user_wav, user_wav);
+    WriteFile(older.user_audio, user_wav);
     assert(store.MarkRecorded(older, user_wav.size(), user_hash, 1000));
     pending = store.ListPending();
     assert(pending.size() == 2);
@@ -119,7 +119,7 @@ int main() {
     // Before authenticated clock sync, recordings use a real offline directory.
     auto offline = store.Create("unsynced", "turn-u-offline");
     assert(offline.valid());
-    WriteFile(offline.user_wav, user_wav);
+    WriteFile(offline.user_audio, user_wav);
     assert(store.MarkRecorded(offline, user_wav.size(), user_hash, 123));
     bool recovered_offline = false;
     for (const auto& turn : store.ListPending()) {
@@ -128,6 +128,18 @@ int main() {
     assert(recovered_offline);
     assert(!store.Create("notadate", "unsafe").valid());
 
+    auto compressed = store.Create("20261013", "amr-input", "amr-nb");
+    assert(compressed.user_audio == compressed.directory + "/user.amr");
+    WriteFile(compressed.user_audio, {'#','!','A','M','R','\n',0x7c});
+    assert(store.MarkRecorded(compressed, 7, user_hash, 456));
+    bool recovered_amr = false;
+    for (const auto& item : store.ListPending()) {
+        if (item.paths.turn_id == "amr-input") {
+            recovered_amr = item.paths.audio_format == "amr-nb" &&
+                item.paths.user_audio == compressed.user_audio;
+        }
+    }
+    assert(recovered_amr);
     AgentTurnPaths unsafe = store.Create("20260712", "../escape");
     assert(!unsafe.valid());
     return 0;

@@ -18,7 +18,7 @@ class RuntimeResult(NamedTuple):
 MILESTONES = {
     "wifi_connected": "Agent voice Wi-Fi connected",
     "wss_ready": "Agent voice WSS ready",
-    "user_wav_stored": "Agent user WAV stored: /sdcard/shenyong/",
+    "user_wav_stored": "Agent user AMR stored: /sdcard/shenyong/",
     "turn_accepted": "Agent accepted turn:",
     "assistant_wav_stored": "Agent reply stored: /sdcard/shenyong/",
     "playback_started": "Agent reply playback start: /sdcard/shenyong/",

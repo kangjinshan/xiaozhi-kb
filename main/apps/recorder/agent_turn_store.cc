@@ -193,6 +193,7 @@ struct AgentTurnStore::Record {
     uint64_t created_at_ms = 0;
     uint64_t user_bytes = 0;
     std::string user_sha256;
+    std::string user_path = "user.wav";
     uint64_t assistant_bytes = 0;
     std::string assistant_sha256;
     std::string assistant_path = "assistant.wav";
@@ -230,7 +231,9 @@ AgentTurnStore::~AgentTurnStore() {
 }
 
 AgentTurnPaths AgentTurnStore::Create(const std::string& date,
-                                      const std::string& turn_id) {
+                                      const std::string& turn_id,
+                                      const std::string& audio_format) {
+    if (audio_format != "wav-pcm-s16le" && audio_format != "amr-nb") return {};
     if ((date != "unsynced" && !IsSafeComponent(date, 8)) || !IsSafeComponent(turn_id)) {
         return {};
     }
@@ -244,7 +247,8 @@ AgentTurnPaths AgentTurnStore::Create(const std::string& date,
     paths.turn_id = turn_id;
     paths.date = date;
     paths.directory = directory;
-    paths.user_wav = directory + "/user.wav";
+    paths.audio_format = audio_format;
+    paths.user_audio = directory + (audio_format == "amr-nb" ? "/user.amr" : "/user.wav");
     paths.assistant_wav = directory + "/assistant.wav";
     paths.manifest = directory + "/turn.json";
     return paths;
@@ -254,7 +258,7 @@ bool AgentTurnStore::MarkRecorded(const AgentTurnPaths& paths,
                                   uint64_t user_bytes,
                                   const std::string& user_sha256,
                                   uint64_t created_at_ms) {
-    if (!paths.valid() || !IsFile(paths.user_wav) || user_sha256.size() != 64) {
+    if (!paths.valid() || !IsFile(paths.user_audio) || user_sha256.size() != 64) {
         return false;
     }
     Record record;
@@ -262,6 +266,7 @@ bool AgentTurnStore::MarkRecorded(const AgentTurnPaths& paths,
     record.date = paths.date;
     record.status = AgentTurnStatus::kRecorded;
     record.created_at_ms = created_at_ms;
+    record.user_path = paths.audio_format == "amr-nb" ? "user.amr" : "user.wav";
     record.user_bytes = user_bytes;
     record.user_sha256 = user_sha256;
     return WriteRecord(paths, record);
@@ -318,10 +323,10 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
             paths.turn_id = turn_id;
             paths.date = date;
             paths.directory = date_path + "/" + turn_id;
-            paths.user_wav = paths.directory + "/user.wav";
+            paths.user_audio = paths.directory + "/user.wav";
             paths.assistant_wav = paths.directory + "/assistant.wav";
             paths.manifest = paths.directory + "/turn.json";
-            if (!IsDirectory(paths.directory) || !IsFile(paths.user_wav)) {
+            if (!IsDirectory(paths.directory)) {
                 continue;
             }
             Record record;
@@ -330,6 +335,9 @@ std::vector<AgentPendingTurn> AgentTurnStore::ListPending() const {
                 record.status == AgentTurnStatus::kFailed) {
                 continue;
             }
+            paths.audio_format = record.user_path == "user.amr" ? "amr-nb" : "wav-pcm-s16le";
+            paths.user_audio = paths.directory + "/" + record.user_path;
+            if (!IsFile(paths.user_audio)) continue;
             unlink((paths.assistant_wav + ".part").c_str());
             unlink((paths.directory + "/assistant.amr.part").c_str());
             pending.push_back({
@@ -474,6 +482,8 @@ bool AgentTurnStore::LoadRecord(const AgentTurnPaths& paths, Record* record) con
         !ExtractString(json, "user_sha256", &record->user_sha256)) {
         return false;
     }
+    ExtractString(json, "user_path", &record->user_path);
+    if (record->user_path != "user.wav" && record->user_path != "user.amr") return false;
     ExtractUint64(json, "assistant_bytes", &record->assistant_bytes);
     ExtractString(json, "assistant_sha256", &record->assistant_sha256);
     ExtractString(json, "assistant_path", &record->assistant_path);
@@ -493,7 +503,7 @@ bool AgentTurnStore::WriteRecord(const AgentTurnPaths& paths,
          << ",\"date\":\"" << JsonEscape(record.date) << "\""
          << ",\"status\":\"" << AgentTurnStatusName(record.status) << "\""
          << ",\"created_at_ms\":" << record.created_at_ms
-         << ",\"user_path\":\"user.wav\""
+         << ",\"user_path\":\"" << JsonEscape(record.user_path) << "\""
          << ",\"user_bytes\":" << record.user_bytes
          << ",\"user_sha256\":\"" << JsonEscape(record.user_sha256) << "\""
          << ",\"assistant_path\":\"" << JsonEscape(record.assistant_path) << "\""

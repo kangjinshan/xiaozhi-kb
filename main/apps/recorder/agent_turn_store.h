@@ -20,7 +20,8 @@ struct AgentTurnPaths {
     std::string turn_id;
     std::string date;
     std::string directory;
-    std::string user_wav;
+    std::string user_audio;
+    std::string audio_format = "wav-pcm-s16le";
     std::string assistant_wav;
     std::string manifest;
 
@@ -40,7 +41,8 @@ public:
     explicit AgentTurnStore(std::string root);
     ~AgentTurnStore();
 
-    AgentTurnPaths Create(const std::string& date, const std::string& turn_id);
+    AgentTurnPaths Create(const std::string& date, const std::string& turn_id,
+                          const std::string& audio_format = "wav-pcm-s16le");
     bool MarkRecorded(const AgentTurnPaths& paths,
                       uint64_t user_bytes,
                       const std::string& user_sha256,
