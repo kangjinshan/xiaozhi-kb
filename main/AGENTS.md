@@ -64,3 +64,7 @@
 | 镜像超过最小 app 分区 | 低 | 高：构建或 OTA 失败 | 每次构建检查 `check_sizes.py` 剩余空间 |
 
 修改本目录代码、配置或子模块职责后，必须同步更新本文件；若启动流程或全局约束变化，还需更新仓库根 `AGENTS.md`。
+
+CMake runs the tracked WebSocket lifetime patch before building the managed dependency.
+Failed upgrades still own a reader task; always disconnect/join it before freeing the
+WebSocket buffers or event group, otherwise a service restart can trigger double-free.

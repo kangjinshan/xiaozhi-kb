@@ -1,3 +1,13 @@
+# Keep the pinned WebSocket receive task alive until its owner is fully stopped.
+execute_process(
+    COMMAND ${PYTHON} "${PROJECT_DIR}/scripts/patch_recorder_websocket.py"
+            --source "${PROJECT_DIR}/managed_components/78__esp-ml307/src/web_socket.cc"
+    RESULT_VARIABLE recorder_websocket_patch_result
+)
+if(NOT recorder_websocket_patch_result EQUAL 0)
+    message(FATAL_ERROR "WebSocket lifetime patch failed")
+endif()
+
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"

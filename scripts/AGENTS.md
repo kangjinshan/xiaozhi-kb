@@ -78,3 +78,9 @@ PYTHONPATH=scripts python3 scripts/test_install_mic_macos_service.py
 | 发布脚本使用错误板型/分区 | 低 | 高：固件不可启动 | 发布前核对 `sdkconfig.defaults.esp32c6` 和 `16m_c3.csv` |
 | Mic 两端协议字段不一致 | 中 | 高：无法解码或声道错误 | 同步 UUID/format/header 并运行接收器单测 |
 | UDP 发送或接收排队导致缺口 | 中 | 中：虚拟麦克风点击/静音 | 设备发送有界等待 3 ms；接收器按 sequence 统计并对短缺口补静音 |
+
+`patch_recorder_websocket.py` is invoked during CMake configuration for the pinned
+esp-ml307 dependency. It makes WebSocket destruction always stop/join the TCP reader,
+even after an HTTP upgrade failure, before destroying callback-owned members. The
+patch is idempotent and rejects changed upstream code; its test covers both guards.
+Never replace it with a delay or disable heap checks.
